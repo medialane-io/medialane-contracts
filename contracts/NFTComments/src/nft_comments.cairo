@@ -18,6 +18,7 @@ trait IUpgradeable<TContractState> {
 #[starknet::contract]
 mod NFTComments {
     use starknet::{ContractAddress, get_caller_address, get_block_timestamp, ClassHash};
+    use starknet::storage::{StorageMapReadAccess, StorageMapWriteAccess};
     use core::num::traits::Zero;
     use openzeppelin_upgrades::UpgradeableComponent;
     use openzeppelin_access::ownable::OwnableComponent;
@@ -36,6 +37,7 @@ mod NFTComments {
         upgradeable: UpgradeableComponent::Storage,
         #[substorage(v0)]
         ownable: OwnableComponent::Storage,
+        last_comment_time: starknet::storage::Map<ContractAddress, u64>,
     }
 
     #[event]
@@ -73,13 +75,17 @@ mod NFTComments {
             assert!(!nft_contract.is_zero(), "invalid nft contract");
             assert!(content.len() > 0, "comment cannot be empty");
             assert!(content.len() <= 1000, "comment too long");
-            // get_caller_address() is never zero on Starknet (protocol guarantee)
+            let caller = get_caller_address();
+            let last_time = self.last_comment_time.read(caller);
+            let now = get_block_timestamp();
+            assert!(now >= last_time + 60_u64, "rate limited: wait 60 seconds between comments");
+            self.last_comment_time.write(caller, now);
             self.emit(CommentAdded {
                 nft_contract,
                 token_id,
-                author: get_caller_address(),
+                author: caller,
                 content,
-                timestamp: get_block_timestamp(),
+                timestamp: now,
             });
         }
     }

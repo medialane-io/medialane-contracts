@@ -7,6 +7,10 @@ pub mod core {
     pub mod utils;
 }
 
+pub mod comments {
+    pub mod nft_comments;
+}
+
 pub mod mocks {
     pub mod account;
     pub mod erc1155;

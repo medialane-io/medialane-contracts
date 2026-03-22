@@ -1,0 +1,1 @@
+{"version":1,"contracts":[{"id":"etssm8d79hslc","package_name":"nft_comments","contract_name":"NFTComments","module_path":"nft_comments::nft_comments::NFTComments","artifacts":{"sierra":"nft_comments_NFTComments.contract_class.json","casm":null}}]}

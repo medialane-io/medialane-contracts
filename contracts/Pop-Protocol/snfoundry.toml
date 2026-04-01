@@ -1,0 +1,7 @@
+[sncast.pop-mainnet]
+account = "mediolanoprotocol"
+accounts-file = "/Users/medialane/.starknet_accounts/starknet_open_zeppelin_accounts.json"
+url = "https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/tOTwt1ug3YNOsaPjinDvS"
+wait-params = { timeout = 300, retry-interval = 10 }
+block-explorer = "StarkScan"
+show-explorer-links = true

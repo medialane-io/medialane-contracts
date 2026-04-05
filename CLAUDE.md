@@ -117,9 +117,88 @@ POP_START_BLOCK=8328934
 - `POPFactory::CollectionCreated` → registers Collection with `source: POP_PROTOCOL`
 - `POPCollection::AllowlistUpdated` → syncs PopAllowlist table (slow-poll per collection)
 
+### Collection-Drop (`contracts/Collection-Drop/`)
+
+Multi-tenant timed NFT drop service. Factory + collection pattern: platform deploys one DropFactory; organizers call `create_drop()` to deploy per-drop DropCollection instances (transferable ERC-721).
+
+- **DropFactory address**: `0x03587f42e29daee1b193f6cf83bf8627908ed6632d0d83fcb26225c50547d800`
+- **DropFactory class hash**: `0x072b3f26370b2a125732165dd07491e808a0de67ab9e0f95e5ab9013b15a3383`
+- **DropCollection class hash**: `0x00092e72cdb63067521e803aaf7d4101c3e3ce026ae6bc045ec4228027e58282`
+- **Admin (DEFAULT_ADMIN_ROLE + ORGANIZER_ROLE)**: `mediolanoprotocol` (`0x4cc6df27c62aa4bf3dcfc8fe8c02a8473bd08a96ee7013c06fb8f4f847d5d7b`)
+- **Deploy tx**: `0x058fb5762389cd23e6e7e36089bff5dc7546c03f7fd34673504564fc34614696`
+- **Deployer account**: `mediolanoprotocol` (in `~/.starknet_accounts/starknet_open_zeppelin_accounts.json`)
+- **snfoundry.toml profile**: `drop-mainnet` (in `contracts/Collection-Drop/snfoundry.toml`)
+
+**Build + declare workflow:**
+```bash
+PATH="/Users/kalamaha/.cargo/bin:/Users/kalamaha/.asdf/installs/scarb/2.11.4/bin:/Users/kalamaha/.local/bin:$PATH" \
+UNIVERSAL_SIERRA_COMPILER=/Users/kalamaha/.local/bin/universal-sierra-compiler \
+  scarb build
+
+PATH="..." sncast --profile drop-mainnet declare --contract-name DropCollection
+PATH="..." sncast --profile drop-mainnet declare --contract-name DropFactory
+PATH="..." sncast --profile drop-mainnet deploy \
+  --class-hash <factory_class_hash> \
+  --arguments '<admin>, <drop_collection_class_hash>'
+```
+
+**Gas note**: DropCollection declaration costs ~59 STRK (large contract). The `mediolanoprotocol` account needs ~200+ STRK balance before declaring — sncast sets max bounds at ~2.25x estimated fee. If declare fails with "Resources bounds exceed balance", top up the account.
+
+**Upgrading DropCollection class (new features):**
+1. Modify contract, `scarb build`, declare new DropCollection → new class hash
+2. Call `set_drop_collection_class_hash(new_class_hash)` on the factory as admin
+3. All new `create_drop()` calls will deploy the updated class
+
+**Test runner:**
+```bash
+PATH="...snforge 0.48.1 bin..." snforge test
+# Uses snforge_std_deprecated = "0.48.1" in Scarb.toml (required for Scarb < 2.12.0)
+```
+
+**Backend env vars (to add):**
+```
+DROP_FACTORY_ADDRESS=0x03587f42e29daee1b193f6cf83bf8627908ed6632d0d83fcb26225c50547d800
+DROP_START_BLOCK=8341335
+```
+
+**Key events indexed by backend:**
+- `DropFactory::DropCreated` → registers Collection with `source: COLLECTION_DROP`
+- `DropCollection::TokensClaimed` → updates mint counts
+
+---
+
 ### Medialane-Protocol (`contracts/Medialane-Protocol/`)
 
-Core marketplace and collection registry contracts. Not actively modified — see medialane-backend CLAUDE.md for contract addresses and ABI notes.
+Core marketplace contracts (order registration, fulfillment, cancellation). Audited and redeployed 2026-04-05.
+
+- **Contract address**: `0x0234f4e8838801ebf01d7f4166d42aed9a55bc67c1301162decf9e2040e05f16`
+- **Class hash**: `0x06e45fbc001580e52948d528e236002cd35a226b557a81400e0fb77ddbaa7727`
+- **Deploy tx**: `0x0272a9d748dc4a589f19c1445474ff6833f50bc6cb2c09a20295fcf0e4ccbc31`
+- **Manager (DEFAULT_ADMIN_ROLE)**: `mediolanoprotocol` (`0x4cc6df27c62aa4bf3dcfc8fe8c02a8473bd08a96ee7013c06fb8f4f847d5d7b`)
+- **Native token**: STRK (`0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d`)
+- **snfoundry.toml profile**: `medialane-mainnet` (in `contracts/Medialane-Protocol/snfoundry.toml`)
+
+**Previous deployment**: `0x04299b51289aa700de4ce19cc77bcea8430bfd1aef04193efab09d60a3a7ee0f` (superseded — security fixes applied)
+
+**Key security fixes in this deployment (2026-04-05):**
+- M-03: `cancel_order` now verifies signer is the order's offerer
+- M-02: `fulfill_order` now verifies caller == fulfiller (prevents front-running)
+- M-04: `end_amount` must equal `start_amount` (fixed price enforced)
+- M-01: Immediate-validity orders (`start_time == now`) now registerable
+- M-05: CEI pattern — order marked Filled before ERC-1155 external call
+- M-06/07/08/09: input validation hardened throughout
+
+**Build + declare + deploy workflow:**
+```bash
+PATH="/Users/kalamaha/.cargo/bin:/Users/kalamaha/.asdf/installs/scarb/2.11.4/bin:/Users/kalamaha/.local/bin:$PATH" \
+UNIVERSAL_SIERRA_COMPILER=/Users/kalamaha/.local/bin/universal-sierra-compiler \
+  scarb build
+
+PATH="..." sncast --profile medialane-mainnet declare --contract-name Medialane
+PATH="..." sncast --profile medialane-mainnet deploy \
+  --class-hash <new_class_hash> \
+  --arguments '<manager_address>, <native_token_address>'
+```
 
 ---
 
@@ -132,6 +211,12 @@ accounts-file = "/Users/kalamaha/.starknet_accounts/starknet_open_zeppelin_accou
 network = "mainnet"
 
 [sncast.pop-mainnet]
+account = "mediolanoprotocol"
+accounts-file = "/Users/medialane/.starknet_accounts/starknet_open_zeppelin_accounts.json"
+url = "https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/tOTwt1ug3YNOsaPjinDvS"
+wait-params = { timeout = 300, retry-interval = 10 }
+
+[sncast.drop-mainnet]
 account = "mediolanoprotocol"
 accounts-file = "/Users/medialane/.starknet_accounts/starknet_open_zeppelin_accounts.json"
 url = "https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/tOTwt1ug3YNOsaPjinDvS"

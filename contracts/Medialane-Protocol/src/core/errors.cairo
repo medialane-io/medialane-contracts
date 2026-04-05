@@ -14,6 +14,9 @@ pub mod errors {
     pub const INVALID_ITEM_TYPE: felt252 = 'Invalid item type';
     pub const OFFER_CONSIDERATION_MISMATCH: felt252 = 'Mismatch items';
     pub const CALLER_NOT_OFFERER: felt252 = 'Caller not offerer';
+    pub const CALLER_NOT_FULFILLER: felt252 = 'Caller not fulfiller';
+    pub const END_AMOUNT_MISMATCH: felt252 = 'End amount must equal start';
+    pub const INVALID_OFFERER: felt252 = 'Offerer cannot be zero';
     pub const UNSUPPORTED_TOKEN_STANDARD: felt252 = 'Unsupported token';
     pub const INVALID_AMOUNT: felt252 = 'Invalid amount';
     pub const NATIVE_TRANSFER_FAILED: felt252 = 'STRK transfer failed';

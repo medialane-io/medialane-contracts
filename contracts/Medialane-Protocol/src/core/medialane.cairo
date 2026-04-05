@@ -16,7 +16,7 @@ pub mod Medialane {
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
     };
-    use starknet::{ClassHash, ContractAddress, get_block_timestamp};
+    use starknet::{ClassHash, ContractAddress, get_block_timestamp, get_caller_address};
     use crate::core::errors::*;
     use crate::core::events::*;
     use crate::core::interface::*;
@@ -122,6 +122,30 @@ pub mod Medialane {
 
             let offerer = order_parameters.offerer;
 
+            // M-09: Reject zero-address offerer
+            assert(offerer != 0.try_into().unwrap(), errors::INVALID_OFFERER);
+
+            // M-07: Validate item types are recognised at registration, not only at fulfillment
+            let offer_type_valid: Option<ItemType> = order_parameters.offer.item_type.try_into();
+            assert(offer_type_valid.is_some(), errors::INVALID_ITEM_TYPE);
+            let consideration_type_valid: Option<ItemType> = order_parameters
+                .consideration
+                .item_type
+                .try_into();
+            assert(consideration_type_valid.is_some(), errors::INVALID_ITEM_TYPE);
+
+            // M-04: Dutch-auction interpolation is not implemented — enforce fixed price
+            assert(
+                order_parameters.offer.start_amount == order_parameters.offer.end_amount,
+                errors::END_AMOUNT_MISMATCH,
+            );
+            assert(
+                order_parameters.consideration.start_amount == order_parameters
+                    .consideration
+                    .end_amount,
+                errors::END_AMOUNT_MISMATCH,
+            );
+
             let order_hash = order_parameters.get_message_hash(offerer);
 
             self._validate_hash_signature(order_hash.clone(), offerer, signature);
@@ -187,6 +211,10 @@ pub mod Medialane {
             let mut order_details = self.orders.read(order_hash);
 
             let fulfiller = fulfillment_intent.fulfiller;
+
+            // M-02: Caller must be the fulfiller — prevents front-running via mempool replay
+            assert(get_caller_address() == fulfiller, errors::CALLER_NOT_FULFILLER);
+
             let fulfillment_hash = fulfillment_intent.get_message_hash(fulfiller);
 
             self._validate_hash_signature(fulfillment_hash.clone(), fulfiller, signature);
@@ -196,14 +224,14 @@ pub mod Medialane {
 
             self.nonces.use_checked_nonce(fulfiller, fulfillment_intent.nonce);
 
-            // Execute Transfers (Interaction)
-            self._execute_transfers(order_details, fulfiller);
-
+            // M-05: Effects before Interactions (CEI) — mark order filled before external calls
+            // so a re-entrant ERC-1155 onReceived callback cannot re-enter fulfill_order
             order_details.order_status = OrderStatus::Filled;
             order_details.fulfiller = Option::Some(fulfiller);
-
-            // Update Order Status
             self.orders.write(order_hash, order_details);
+
+            // Execute Transfers (Interaction — after state is committed)
+            self._execute_transfers(order_details, fulfiller);
 
             self
                 .emit(
@@ -241,10 +269,14 @@ pub mod Medialane {
 
             self._validate_order_status(order_hash, OrderStatus::Created);
 
+            let mut order_details = self.orders.read(order_hash);
+
+            // M-03: Verify the cancellation signer is the actual offerer of this order.
+            // Without this, any SRC-6 account could cancel any other user's order.
+            assert(offerer == order_details.offerer, errors::CALLER_NOT_OFFERER);
+
             let cancelation_hash = cancelation_intent.get_message_hash(offerer);
             self._validate_hash_signature(cancelation_hash, offerer, signature);
-
-            let mut order_details = self.orders.read(order_hash);
 
             order_details.order_status = OrderStatus::Cancelled;
 
@@ -307,7 +339,8 @@ pub mod Medialane {
         /// Validates that the order is scheduled for the future (not yet valid)
         fn _validate_future_order(self: @ContractState, start_time: u64, end_time: u64) {
             let current_timestamp = get_block_timestamp();
-            assert(current_timestamp < start_time, errors::ORDER_NOT_YET_VALID);
+            // Allow start_time == current block (immediately-active orders)
+            assert(current_timestamp <= start_time, errors::ORDER_NOT_YET_VALID);
 
             if end_time != 0 {
                 assert(current_timestamp < end_time, errors::ORDER_EXPIRED);
@@ -410,7 +443,11 @@ pub mod Medialane {
             let offerer = parameters.offerer;
 
             // Process Offers: Offerer -> Fulfiller
-            let mut offer_item = parameters.offer.clone();
+            let offer_item = parameters.offer;
+
+            // M-08: Clean error on invalid item_type rather than an opaque unwrap panic
+            let offer_type: Option<ItemType> = offer_item.item_type.try_into();
+            assert(offer_type.is_some(), errors::INVALID_ITEM_TYPE);
 
             // Note: Recipient for offered items is always the fulfiller
             self
@@ -418,25 +455,29 @@ pub mod Medialane {
                     felt_to_u256(offer_item.start_amount),
                     felt_to_u256(offer_item.end_amount),
                     Option::Some(offer_item.token),
-                    offer_item.item_type.try_into().unwrap(),
+                    offer_type.unwrap(),
                     Option::Some(felt_to_u256(offer_item.identifier_or_criteria)),
                     offerer,
                     fulfiller,
                 );
 
             // Process Considerations: Fulfiller -> Recipient specified in item
-            let mut consideration_item = parameters.consideration.clone();
+            let consideration_item = parameters.consideration;
 
             assert(
                 consideration_item.recipient != 0.try_into().unwrap(), 'Recipient cannot be zero',
             );
+
+            let consideration_type: Option<ItemType> = consideration_item.item_type.try_into();
+            assert(consideration_type.is_some(), errors::INVALID_ITEM_TYPE);
+
             // Sender for consideration items is always the fulfiller
             self
                 ._transfer_item(
                     felt_to_u256(consideration_item.start_amount),
                     felt_to_u256(consideration_item.end_amount),
                     Option::Some(consideration_item.token),
-                    consideration_item.item_type.try_into().unwrap(),
+                    consideration_type.unwrap(),
                     Option::Some(felt_to_u256(consideration_item.identifier_or_criteria)),
                     fulfiller,
                     consideration_item.recipient,

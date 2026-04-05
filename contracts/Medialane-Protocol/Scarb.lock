@@ -11,7 +11,7 @@ dependencies = [
  "openzeppelin_token",
  "openzeppelin_upgrades",
  "openzeppelin_utils",
- "snforge_std",
+ "snforge_std_deprecated",
 ]
 
 [[package]]
@@ -64,16 +64,16 @@ source = "registry+https://scarbs.xyz/"
 checksum = "sha256:bf799c794139837f397975ffdf6a7ed5032d198bbf70e87a8f44f144a9dfc505"
 
 [[package]]
-name = "snforge_scarb_plugin"
-version = "0.44.0"
+name = "snforge_scarb_plugin_deprecated"
+version = "0.48.1"
 source = "registry+https://scarbs.xyz/"
-checksum = "sha256:ec8c7637b33392a53153c1e5b87a4617ddcb1981951b233ea043cad5136697e2"
+checksum = "sha256:8b822345a82a4479cfbf8e605a4cd25c0a622585fd5640c4add524c5da5a8b55"
 
 [[package]]
-name = "snforge_std"
-version = "0.44.0"
+name = "snforge_std_deprecated"
+version = "0.48.1"
 source = "registry+https://scarbs.xyz/"
-checksum = "sha256:d4affedfb90715b1ac417b915c0a63377ae6dd69432040e5d933130d65114702"
+checksum = "sha256:da9e4a8bbf8ba5f85e91e4b37a967b10eca0cb377a505eb7a8f37d0df721a874"
 dependencies = [
- "snforge_scarb_plugin",
+ "snforge_scarb_plugin_deprecated",
 ]

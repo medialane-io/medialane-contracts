@@ -12,7 +12,7 @@ mod test {
     use openzeppelin_account::interface::AccountABIDispatcher;
     use openzeppelin_token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use openzeppelin_token::erc721::interface::{IERC721Dispatcher, IERC721DispatcherTrait};
-    use snforge_std::{
+    use snforge_std_deprecated::{
         CheatSpan, ContractClassTrait, DeclareResultTrait, EventSpyAssertionsTrait,
         cheat_caller_address, declare, spy_events, start_cheat_block_timestamp,
         stop_cheat_block_timestamp,

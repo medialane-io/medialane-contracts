@@ -15,7 +15,7 @@ openzeppelin_account = "2.0.0"
 openzeppelin_upgrades = "2.0.0"
 
 [dev-dependencies]
-snforge_std = "0.44.0"
+snforge_std_deprecated = "0.48.1"
 assert_macros = "2.11.4"
 
 [[target.starknet-contract]]
@@ -25,7 +25,7 @@ sierra = true
 test = "snforge test"
 
 [tool.scarb]
-allow-prebuilt-plugins = ["snforge_std"]
+allow-prebuilt-plugins = ["snforge_std_deprecated"]
 
 # Visit https://foundry-rs.github.io/starknet-foundry/appendix/scarb-toml.html for more information
 

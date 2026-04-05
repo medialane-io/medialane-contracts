@@ -68,7 +68,9 @@ pub fn felt_to_u32(value: felt252) -> u32 {
 }
 
 pub fn felt_to_u64(value: felt252) -> u64 {
-    value.try_into().unwrap()
+    let result: Option<u64> = value.try_into();
+    assert(result.is_some(), 'Timestamp out of range');
+    result.unwrap()
 }
 
 pub fn felt_to_u128(value: felt252) -> u128 {

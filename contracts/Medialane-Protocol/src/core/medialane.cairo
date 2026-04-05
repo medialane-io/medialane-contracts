@@ -1,6 +1,5 @@
 #[starknet::contract]
 pub mod Medialane {
-    use core::integer::u64;
     use openzeppelin_access::accesscontrol::AccessControlComponent::InternalTrait;
     use openzeppelin_access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
     use openzeppelin_account::interface::{ISRC6Dispatcher, ISRC6DispatcherTrait};
@@ -148,16 +147,15 @@ pub mod Medialane {
 
             let order_hash = order_parameters.get_message_hash(offerer);
 
-            self._validate_hash_signature(order_hash.clone(), offerer, signature);
-
-            // Validate Order Status (Nonce, Not Filled/Cancelled)
-            self._validate_order_status(order_hash, OrderStatus::None);
+            // Cheap checks first — avoid paying for the SRC-6 external call on a doomed order
+            self._assert_order_status(order_hash, OrderStatus::None);
 
             let start_time = felt_to_u64(order_parameters.start_time);
             let end_time = felt_to_u64(order_parameters.end_time);
-
-            // Validate Order Timing (Start/End Time)
             self._validate_future_order(start_time, end_time);
+
+            // Signature verify (expensive external call) only after all cheap checks pass
+            self._validate_hash_signature(order_hash, offerer, signature);
 
             self.nonces.use_checked_nonce(offerer, order_parameters.nonce);
 
@@ -205,10 +203,8 @@ pub mod Medialane {
             let signature = fulfillment_request.signature;
             let order_hash = fulfillment_intent.order_hash;
 
-            // Validate Order Status is Created
-            self._validate_order_status(order_hash, OrderStatus::Created);
-
-            let mut order_details = self.orders.read(order_hash);
+            // Single storage read — _assert_order_status returns the order we already fetched
+            let mut order_details = self._assert_order_status(order_hash, OrderStatus::Created);
 
             let fulfiller = fulfillment_intent.fulfiller;
 
@@ -217,7 +213,7 @@ pub mod Medialane {
 
             let fulfillment_hash = fulfillment_intent.get_message_hash(fulfiller);
 
-            self._validate_hash_signature(fulfillment_hash.clone(), fulfiller, signature);
+            self._validate_hash_signature(fulfillment_hash, fulfiller, signature);
 
             // Validate Order Timing (Start/End Time)
             self._validate_active_order(order_details.start_time, order_details.end_time);
@@ -267,9 +263,8 @@ pub mod Medialane {
             let offerer = cancelation_intent.offerer;
             let order_hash = cancelation_intent.order_hash;
 
-            self._validate_order_status(order_hash, OrderStatus::Created);
-
-            let mut order_details = self.orders.read(order_hash);
+            // Single storage read — _assert_order_status returns the order we already fetched
+            let mut order_details = self._assert_order_status(order_hash, OrderStatus::Created);
 
             // M-03: Verify the cancellation signer is the actual offerer of this order.
             // Without this, any SRC-6 account could cancel any other user's order.
@@ -383,9 +378,11 @@ pub mod Medialane {
         /// * `errors::ORDER_ALREADY_CREATED` if the order is already created.
         /// * `errors::ORDER_ALREADY_FILLED` if the order is already filled.
         /// * `errors::ORDER_CANCELLED` if the order is cancelled.
-        fn _validate_order_status(
-            ref self: ContractState, order_hash: felt252, expected: OrderStatus,
-        ) {
+        /// Asserts the order is in `expected` status and returns its details.
+        /// Callers reuse the returned struct instead of reading storage a second time.
+        fn _assert_order_status(
+            self: @ContractState, order_hash: felt252, expected: OrderStatus,
+        ) -> OrderDetails {
             let order_details = self.orders.read(order_hash);
             let actual_status = order_details.order_status;
             assert(
@@ -397,6 +394,7 @@ pub mod Medialane {
                     OrderStatus::Cancelled => errors::ORDER_CANCELLED,
                 },
             );
+            order_details
         }
 
         /// Verifies the order signature against the order hash and signer address.
@@ -445,18 +443,16 @@ pub mod Medialane {
             // Process Offers: Offerer -> Fulfiller
             let offer_item = parameters.offer;
 
-            // M-08: Clean error on invalid item_type rather than an opaque unwrap panic
+            // M-08: Clean error on invalid item_type (defensive — M-07 already guards at registration)
             let offer_type: Option<ItemType> = offer_item.item_type.try_into();
             assert(offer_type.is_some(), errors::INVALID_ITEM_TYPE);
 
-            // Note: Recipient for offered items is always the fulfiller
             self
                 ._transfer_item(
                     felt_to_u256(offer_item.start_amount),
-                    felt_to_u256(offer_item.end_amount),
-                    Option::Some(offer_item.token),
+                    offer_item.token,
                     offer_type.unwrap(),
-                    Option::Some(felt_to_u256(offer_item.identifier_or_criteria)),
+                    felt_to_u256(offer_item.identifier_or_criteria),
                     offerer,
                     fulfiller,
                 );
@@ -471,14 +467,12 @@ pub mod Medialane {
             let consideration_type: Option<ItemType> = consideration_item.item_type.try_into();
             assert(consideration_type.is_some(), errors::INVALID_ITEM_TYPE);
 
-            // Sender for consideration items is always the fulfiller
             self
                 ._transfer_item(
                     felt_to_u256(consideration_item.start_amount),
-                    felt_to_u256(consideration_item.end_amount),
-                    Option::Some(consideration_item.token),
+                    consideration_item.token,
                     consideration_type.unwrap(),
-                    Option::Some(felt_to_u256(consideration_item.identifier_or_criteria)),
+                    felt_to_u256(consideration_item.identifier_or_criteria),
                     fulfiller,
                     consideration_item.recipient,
                 );
@@ -508,48 +502,40 @@ pub mod Medialane {
         /// * `errors::TRANSFER_FAILED` if the transfer of ERC20 tokens fails.
         fn _transfer_item(
             ref self: ContractState,
-            start_amount: u256,
-            end_amount: u256,
-            token: Option<ContractAddress>,
+            amount: u256,
+            token: ContractAddress,
             item_type: ItemType,
-            identifier_or_criteria: Option<u256>,
+            identifier: u256,
             from: ContractAddress,
             to: ContractAddress,
         ) {
-            assert(start_amount > 0.into(), errors::INVALID_AMOUNT);
+            assert(amount > 0.into(), errors::INVALID_AMOUNT);
 
             match item_type {
                 ItemType::NATIVE => {
+                    // `token` param is ignored for NATIVE — uses the stored STRK address
+                    // Need allowance: `from` must approve this contract address
                     let dispatcher = IERC20Dispatcher {
                         contract_address: self.native_token_address.read(),
                     };
-                    // Need allowance: `from` must approve this contract address
-                    let success = dispatcher.transfer_from(from, to, start_amount);
+                    let success = dispatcher.transfer_from(from, to, amount);
                     assert(success, errors::NATIVE_TRANSFER_FAILED);
                 },
                 ItemType::ERC20 => {
-                    let dispatcher = IERC20Dispatcher { contract_address: token.unwrap() };
                     // Need allowance: `from` must approve this contract address
-                    let success = dispatcher.transfer_from(from, to, start_amount);
+                    let success = IERC20Dispatcher { contract_address: token }
+                        .transfer_from(from, to, amount);
                     assert(success, errors::TRANSFER_FAILED);
                 },
                 ItemType::ERC721 => {
-                    assert(start_amount == 1.into(), errors::INVALID_AMOUNT);
-                    let dispatcher = IERC721Dispatcher { contract_address: token.unwrap() };
+                    assert(amount == 1.into(), errors::INVALID_AMOUNT);
                     // Need approval: `from` must setApprovalForAll for this contract address
-                    dispatcher.transfer_from(from, to, identifier_or_criteria.unwrap());
+                    IERC721Dispatcher { contract_address: token }.transfer_from(from, to, identifier);
                 },
                 ItemType::ERC1155 => {
-                    let dispatcher = IERC1155Dispatcher { contract_address: token.unwrap() };
                     // Need approval: `from` must setApprovalForAll for this contract address
-                    dispatcher
-                        .safe_transfer_from(
-                            from,
-                            to,
-                            identifier_or_criteria.unwrap(),
-                            start_amount,
-                            array![].span(),
-                        );
+                    IERC1155Dispatcher { contract_address: token }
+                        .safe_transfer_from(from, to, identifier, amount, array![].span());
                 },
             }
         }

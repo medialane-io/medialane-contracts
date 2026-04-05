@@ -3,5 +3,5 @@
 Open-source repository for Medialane Cairo Smart Contracts. Powered on Starknet.
 
 # Medialane Marketplace Protocol Starknet Mainnet
-CONTRACT=0x04299b51289aa700de4ce19cc77bcea8430bfd1aef04193efab09d60a3a7ee0f
-HASH=0x06d68f82646eccdbfed00ac905c4bb74f69072642fa6390531c3d8083d19fa3a
+CONTRACT=0x0234f4e8838801ebf01d7f4166d42aed9a55bc67c1301162decf9e2040e05f16
+HASH=0x06e45fbc001580e52948d528e236002cd35a226b557a81400e0fb77ddbaa7727

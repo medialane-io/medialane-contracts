@@ -226,3 +226,64 @@ wait-params = { timeout = 300, retry-interval = 10 }
 **Accounts file location**: The `starknet_open_zeppelin_accounts.json` was originally at `/Users/kalamaha/.starknet_accounts/` (old username) and has been copied to `/Users/medialane/.starknet_accounts/`. Both paths work.
 
 Add new profiles here for additional contracts/accounts.
+
+---
+
+### MDLN Token (`contracts/MDLN/`) — Ethereum L1 (Solidity)
+
+Governance and utility token for the Medialane DAO. Deployed on Ethereum mainnet; bridged to Starknet via StarkGate.
+
+- **Stack**: Solidity 0.8.24 + OpenZeppelin v5 + Hardhat
+- **Token contract**: `medialane.sol` → `MedialaneToken`
+- **Vesting contract**: `MDLNVesting.sol`
+- **Status**: Ready for Sepolia testnet deploy (pending Node 22 LTS)
+- **Mainnet address**: TBD (not yet deployed)
+- **Gnosis Safe (DAO treasury)**: `0xA7603783edD8ee6FF4B085f90Af53341282d244C` (Ethereum mainnet)
+
+**Tokenomics:**
+- Supply: 21,000,000 MDLN (fixed, no minting)
+- 100% minted to Gnosis Safe at deploy
+- Safe transfers 18.9M to `MDLNVesting` → unlocks 2.1M/year for 9 years
+- Safe retains 2.1M as operational runway
+- No team allocation, no VCs — community enters via LP
+- Initial LP seeding: Starknet Foundation grant (in progress)
+
+**Key design:**
+- `ERC20Votes` — native Snapshot + future on-chain Governor support
+- `ERC20Permit` — gasless approvals, required by StarkGate
+- `ERC20Burnable` — fee-burn mechanics via DAO vote
+- Fully immutable — no owner, no admin, no upgrade
+- Custom errors: `MDLN_ZeroAddress`, `MDLN_TreasuryNotContract`
+- Treasury must be a contract (rejects EOA deploy)
+
+**Vesting contract (`MDLNVesting`):**
+- Holds 18.9M MDLN, releases 2.1M/year to Gnosis Safe
+- Permissionless `release()` — anyone can trigger once tranche is due
+- Catch-up safe — multiple elapsed tranches released in one call
+- Views: `tranchesDue()`, `nextReleaseAt()`, `lockedBalance()`
+
+**Build & test (requires Node 22 LTS):**
+```bash
+# Install Node 22 via Homebrew if needed:
+# brew install node@22
+
+cd contracts/MDLN
+cp .env.example .env   # fill DEPLOYER_PRIVATE_KEY, ETH_RPC_URL, ETHERSCAN_API_KEY
+npm install
+npx hardhat test
+
+# Deploy to Sepolia (testnet)
+npx hardhat run scripts/deploy.js --network sepolia
+
+# Deploy to mainnet
+npx hardhat run scripts/deploy.js --network mainnet
+npx hardhat verify --network mainnet <token_address> "0xA7603783edD8ee6FF4B085f90Af53341282d244C"
+npx hardhat verify --network mainnet <vesting_address> "<token_address>" "0xA7603783edD8ee6FF4B085f90Af53341282d244C"
+```
+
+**Post-deploy checklist:**
+1. From Gnosis Safe: transfer 18,900,000 MDLN to vesting contract
+2. Verify both contracts on Etherscan
+3. Register MDLN on StarkGate for L2 bridging
+4. Create Snapshot space pointing at MDLN token address
+5. Seed Uniswap LP (after Starknet Foundation grant lands)

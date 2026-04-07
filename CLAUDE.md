@@ -236,9 +236,12 @@ Governance and utility token for the Medialane DAO. Deployed on Ethereum mainnet
 - **Stack**: Solidity 0.8.24 + OpenZeppelin v5 + Hardhat
 - **Token contract**: `medialane.sol` → `MedialaneToken`
 - **Vesting contract**: `MDLNVesting.sol`
-- **Status**: Ready for Sepolia testnet deploy (pending Node 22 LTS)
-- **Mainnet address**: TBD (not yet deployed)
+- **Status**: Deployed and verified on Ethereum mainnet (2026-04-07)
+- **MDLN Token (mainnet)**: `0x0DC90d57F3Aa3E836Ffd6E777E543a43A487dB15`
+- **MDLNVesting (mainnet)**: `0x912f61d5e6db656ec1a7be8db8957c5f1e345d58`
 - **Gnosis Safe (DAO treasury)**: `0xA7603783edD8ee6FF4B085f90Af53341282d244C` (Ethereum mainnet)
+- **Sepolia MDLN**: `0x3c64605Bd08A49032FaF44c4C71d5549cAee09Ef`
+- **Sepolia Vesting**: `0x77566634d13Fdf6ae292270eeB26d50De74faafA`
 
 **Tokenomics:**
 - Supply: 21,000,000 MDLN (fixed, no minting)

@@ -1,7 +1,7 @@
 const hre = require("hardhat");
 
-// Medialane DAO Gnosis Safe (3-of-5 multisig) — receives all MDLN at deploy
-const TREASURY = "0xA7603783edD8ee6FF4B085f90Af53341282d244C";
+// Mainnet: real Gnosis Safe. Testnet: deploy a MockSafe as treasury.
+const MAINNET_TREASURY = "0xA7603783edD8ee6FF4B085f90Af53341282d244C";
 
 const TOTAL_SUPPLY    = hre.ethers.parseUnits("21000000",  18); // 21M MDLN
 const VESTING_DEPOSIT = hre.ethers.parseUnits("18900000",  18); // 18.9M — locked in vesting
@@ -9,7 +9,18 @@ const VESTING_DEPOSIT = hre.ethers.parseUnits("18900000",  18); // 18.9M — loc
 async function main() {
   const [deployer] = await hre.ethers.getSigners();
 
-  console.log("=== Medialane MDLN Deploy ===");
+  // On testnets deploy a MockSafe as treasury (Gnosis Safe only exists on mainnet)
+  let TREASURY = MAINNET_TREASURY;
+  if (hre.network.name !== "mainnet") {
+    console.log("0. Deploying MockSafe as testnet treasury...");
+    const MockSafe = await hre.ethers.getContractFactory("MockSafe");
+    const mockSafe = await MockSafe.deploy();
+    await mockSafe.waitForDeployment();
+    TREASURY = await mockSafe.getAddress();
+    console.log("   MockSafe:", TREASURY);
+  }
+
+  console.log("\n=== Medialane MDLN Deploy ===");
   console.log("Deployer :", deployer.address);
   console.log("Treasury :", TREASURY);
   console.log("Network  :", hre.network.name);

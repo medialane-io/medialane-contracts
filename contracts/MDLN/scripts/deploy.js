@@ -1,11 +1,10 @@
 const hre = require("hardhat");
 
-// Medialane DAO Gnosis Safe (3-of-5 multisig)
+// Medialane DAO Gnosis Safe (3-of-5 multisig) — receives all MDLN at deploy
 const TREASURY = "0xA7603783edD8ee6FF4B085f90Af53341282d244C";
 
-const TOTAL_SUPPLY      = hre.ethers.parseUnits("21000000",  18); // 21M MDLN
-const OPERATIONAL       = hre.ethers.parseUnits("2100000",   18); //  2.1M — stays in Safe
-const VESTING_DEPOSIT   = hre.ethers.parseUnits("18900000",  18); // 18.9M — locked in vesting
+const TOTAL_SUPPLY    = hre.ethers.parseUnits("21000000",  18); // 21M MDLN
+const VESTING_DEPOSIT = hre.ethers.parseUnits("18900000",  18); // 18.9M — locked in vesting
 
 async function main() {
   const [deployer] = await hre.ethers.getSigners();

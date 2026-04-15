@@ -10,7 +10,7 @@ mod test {
     use medialane_erc1155::core::interface::{IMedialane1155Dispatcher, IMedialane1155DispatcherTrait};
     use medialane_erc1155::core::types::*;
     use medialane_erc1155::mocks::erc1155::{IMockERC1155Dispatcher, IMockERC1155DispatcherTrait};
-    use medialane_erc1155::mocks::erc20::IMockERC20Dispatcher;
+    use medialane_erc1155::mocks::erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
     use openzeppelin_account::interface::AccountABIDispatcher;
     use snforge_std_deprecated::{
         CheatSpan, ContractClassTrait, DeclareResultTrait,
@@ -23,27 +23,29 @@ mod test {
     // Domain: { name: 'Medialane1155', version: 1 }
     // -------------------------------------------------------------------------
 
+    // Signatures computed with StarknetJS 6.24.1 using:
+    //   domain  = { name: 'Medialane1155', version: '1', chainId: '0x534e5f5345504f4c4941', revision: '1' }
+    //   offerer private key  = 0x1a2b3c4d5e6f  (pub: 0x0161523dc3f079d9daf9d97ff87ea448c93e2dc4153e7010d45203ff97f4dfbe)
+    //   fulfiller private key = 0xdeadbeef1234  (pub: 0x074302e19249520569d2cd18869a304dfd1fbfced5760cd8e0ddfe621077d2e2)
+    //   See scripts/compute_signatures.mjs for full reproduction.
     fn erc20_erc1155_order_signature() -> Array<felt252> {
         array![
-            // TODO: recompute with StarknetJS for Medialane1155 domain
-            3454928433868771987793737319591141299303880296339125482430761070816410607020,
-            1687957968351732802669593318187197490044820175724885527288686545380842475828,
+            0xb9bd2f489bb7ee9c2b37e944fdb7de6f3e97a1ca3c678ce743eb0d7f86f013,
+            0x645d166095bd318f9e6dbed73886f2e4fbd42018ea807316225142272944496,
         ]
     }
 
     fn erc20_erc1155_fulfillment_signature() -> Array<felt252> {
         array![
-            // TODO: recompute with StarknetJS for Medialane1155 domain
-            3153762219456228275540139167487013577360679603422098242184045521620900787267,
-            1775594892691740465900712693775684609458245052498958467425546734232892735538,
+            0x4a040545013e490acb66523bb7090feb602ebc4115f2deca01cfd71be31fe54,
+            0x758810b26b58542be5f2391be8ffc2df0c113d4aa2f5eb5c4975eb2de968136,
         ]
     }
 
     fn erc20_erc1155_cancel_signature() -> Array<felt252> {
         array![
-            // TODO: recompute with StarknetJS for Medialane1155 domain
-            3428666881081820239052350035163331228699955344013335388546792595001053179231,
-            641750449764461143285733112189243315208147935584282455090309799624730568160,
+            0x38a77718e113e7b1d0317118e369429853b7af626abb42b0677a0b2ab429533,
+            0x7705786cedd695db185d990a071b88644bcc534d077661dc6d8a95f3049b86b,
         ]
     }
 
@@ -137,7 +139,7 @@ mod test {
 
     fn setup_accounts() -> Accounts {
         let offerer_pub_key: ContractAddress =
-            0x05c9bc4f9800eef3186980708ecedee4f056a4542abd7a24713b07680eda4346
+            0x0161523dc3f079d9daf9d97ff87ea448c93e2dc4153e7010d45203ff97f4dfbe
             .try_into()
             .unwrap();
         let offerer_address: ContractAddress =
@@ -147,7 +149,7 @@ mod test {
         let offerer = deploy_account(offerer_pub_key, offerer_address);
 
         let fulfiller_pub_key: ContractAddress =
-            0x0349afcb9441c4a8ab36d0d04e671479f78c5df5812ec8e5ddec4742d2bb2bec
+            0x074302e19249520569d2cd18869a304dfd1fbfced5760cd8e0ddfe621077d2e2
             .try_into()
             .unwrap();
         let fulfiller_address: ContractAddress =
@@ -361,9 +363,7 @@ mod test {
     // Integration test — fulfill_order: caller must be fulfiller
     // -------------------------------------------------------------------------
 
-    // Requires valid StarknetJS signature — enable once signature array is updated.
     #[test]
-    #[ignore]
     #[should_panic(expected: ('Caller not fulfiller',))]
     fn test_fulfill_order_rejects_wrong_caller() {
         let (contracts, accounts) = setup();
@@ -412,9 +412,7 @@ mod test {
     // Integration test — cancel_order: wrong offerer should fail
     // -------------------------------------------------------------------------
 
-    // Requires valid StarknetJS signature — enable once signature array is updated.
     #[test]
-    #[ignore]
     #[should_panic(expected: ('Caller not offerer',))]
     fn test_cancel_order_rejects_wrong_offerer() {
         let (contracts, accounts) = setup();
@@ -449,9 +447,7 @@ mod test {
     // Integration test — double-fulfill should fail
     // -------------------------------------------------------------------------
 
-    // Requires valid StarknetJS signature — enable once signature array is updated.
     #[test]
-    #[ignore]
     #[should_panic(expected: ('Order already filled',))]
     fn test_fulfill_order_rejects_double_fill() {
         let (contracts, accounts) = setup();
@@ -465,16 +461,50 @@ mod test {
         );
         let order_hash = contracts.medialane.get_order_hash(params, accounts.offerer);
 
-        let order = Order { parameters: params, signature: erc20_erc1155_order_signature() };
-        contracts.medialane.register_order(order);
+        // Register the order
+        contracts.medialane.register_order(Order {
+            parameters: params, signature: erc20_erc1155_order_signature(),
+        });
 
-        // Mark the order as Filled in storage by directly reading/checking status
-        // (Without valid signatures we can't actually call fulfill_order here, so
-        //  this test exercises the status check by attempting to fill a non-Created order.)
-        // The assertion below would fail at signature verification before reaching
-        // ORDER_ALREADY_FILLED — but the test documents the expected behavior.
-        // Full happy-path tests with valid signatures are in test_fulfill_order_erc20_happy_path.
-        let _ = order_hash;
+        // Mint ERC-1155 tokens to offerer and approve Medialane1155
+        cheat_caller_address(
+            contracts.erc1155.contract_address, accounts.owner, CheatSpan::TargetCalls(1),
+        );
+        contracts.erc1155.mint(accounts.offerer, 1_u256, 10_u256, array![].span());
+
+        cheat_caller_address(
+            contracts.erc1155.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
+        );
+        contracts.erc1155.approve(contracts.medialane.contract_address, true);
+
+        // Mint ERC-20 to fulfiller and approve Medialane1155 (total = 1_000_000 * 10)
+        cheat_caller_address(
+            contracts.erc20.contract_address, accounts.owner, CheatSpan::TargetCalls(1),
+        );
+        contracts.erc20.mint_token(accounts.fulfiller, 10_000_000_u256);
+
+        cheat_caller_address(
+            contracts.erc20.contract_address, accounts.fulfiller, CheatSpan::TargetCalls(1),
+        );
+        contracts.erc20.approve_token(contracts.medialane.contract_address, 10_000_000_u256);
+
+        let fulfillment = OrderFulfillment { order_hash, fulfiller: accounts.fulfiller, nonce: 0 };
+
+        // First fulfillment — succeeds
+        cheat_caller_address(
+            contracts.medialane.contract_address, accounts.fulfiller, CheatSpan::TargetCalls(1),
+        );
+        contracts.medialane.fulfill_order(FulfillmentRequest {
+            fulfillment, signature: erc20_erc1155_fulfillment_signature(),
+        });
+
+        // Second fulfillment — status check fires before signature/nonce → ORDER_ALREADY_FILLED
+        cheat_caller_address(
+            contracts.medialane.contract_address, accounts.fulfiller, CheatSpan::TargetCalls(1),
+        );
+        contracts.medialane.fulfill_order(FulfillmentRequest {
+            fulfillment, signature: erc20_erc1155_fulfillment_signature(),
+        });
     }
 
     // -------------------------------------------------------------------------
@@ -532,7 +562,6 @@ mod test {
     // -------------------------------------------------------------------------
 
     #[test]
-    #[ignore]
     #[should_panic(expected: ('Order already created',))]
     fn test_register_order_rejects_duplicate() {
         let (contracts, accounts) = setup();

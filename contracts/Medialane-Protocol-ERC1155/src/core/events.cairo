@@ -10,6 +10,8 @@ pub struct OrderCreated {
     pub nft_contract: ContractAddress,
     pub token_id: felt252,
     pub amount: felt252,
+    pub price_per_unit: felt252,
+    pub payment_token: ContractAddress,
 }
 
 /// Emitted when an order is successfully fulfilled.

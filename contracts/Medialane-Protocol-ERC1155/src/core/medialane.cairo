@@ -188,7 +188,7 @@ pub mod Medialane1155 {
 
             let start_time = felt_to_u64(params.start_time);
             let end_time = felt_to_u64(params.end_time);
-            self._validate_future_order(start_time, end_time);
+            self._validate_future_order(end_time);
 
             // Signature verification (external call) only after all cheap checks pass
             self._validate_hash_signature(order_hash, offerer, signature);
@@ -216,6 +216,8 @@ pub mod Medialane1155 {
                 nft_contract: params.nft_contract,
                 token_id: params.token_id,
                 amount: params.amount,
+                price_per_unit: params.price_per_unit,
+                payment_token: params.payment_token,
             }));
         }
 
@@ -237,6 +239,8 @@ pub mod Medialane1155 {
 
             // Caller must be the fulfiller — prevents front-running via tx replay
             assert(get_caller_address() == fulfiller, errors::CALLER_NOT_FULFILLER);
+            // Offerer cannot fill their own order
+            assert(fulfiller != order_details.offerer, errors::SELF_FULFILLMENT);
 
             let fulfillment_hash = fulfillment_intent.get_message_hash(fulfiller);
             self._validate_hash_signature(fulfillment_hash, fulfiller, signature);
@@ -310,18 +314,17 @@ pub mod Medialane1155 {
 
     #[generate_trait]
     impl InternalFunctions of InternalFunctionsTrait {
-        /// Validates that the current block is at or before start_time (order not yet active).
-        /// Used at registration — ensures the order window is still in the future.
-        fn _validate_future_order(self: @ContractState, start_time: u64, end_time: u64) {
-            let now = get_block_timestamp();
-            assert(now <= start_time, errors::ORDER_NOT_YET_VALID);
+        /// Validates an order at registration time.
+        /// Only rejects if the expiry has already passed — start_time is not checked
+        /// here because the tx may land in a later block than expected.
+        fn _validate_future_order(self: @ContractState, end_time: u64) {
             if end_time != 0 {
-                assert(now < end_time, errors::ORDER_EXPIRED);
+                assert(get_block_timestamp() < end_time, errors::ORDER_EXPIRED);
             }
         }
 
         /// Validates that the current block is within the order's active window.
-        /// Used at fulfillment.
+        /// Used at fulfillment: start_time must have been reached and end_time not passed.
         fn _validate_active_order(self: @ContractState, start_time: u64, end_time: u64) {
             let now = get_block_timestamp();
             assert(now >= start_time, errors::ORDER_NOT_YET_VALID);

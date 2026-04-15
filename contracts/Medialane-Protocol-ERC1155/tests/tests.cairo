@@ -324,10 +324,11 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected: ('Order not yet valid',))]
-    fn test_register_order_rejects_past_start_time() {
+    #[should_panic(expected: ('Order expired',))]
+    fn test_register_order_rejects_expired_end_time() {
         let (contracts, accounts) = setup();
-        // Cheat timestamp to after start_time so order is already "in the past"
+        // Timestamp past the default end_time (1000003600) — registration must fail.
+        // start_time is no longer checked at registration; only end_time matters.
         start_cheat_block_timestamp(contracts.medialane.contract_address, 1000003601);
         let params = default_order_params(
             accounts.offerer,
@@ -340,7 +341,7 @@ mod test {
 
     #[test]
     #[should_panic(expected: ('Order expired',))]
-    fn test_register_order_rejects_expired() {
+    fn test_register_order_rejects_explicit_expired() {
         let (contracts, accounts) = setup();
         let ts: u64 = 1000003601;
         start_cheat_block_timestamp(contracts.medialane.contract_address, ts);
@@ -349,9 +350,8 @@ mod test {
             contracts.erc1155.contract_address,
             contracts.erc20.contract_address,
         );
-        // start_time == current ts → first assert passes (now <= start_time)
-        // end_time < current ts → second assert fails → ORDER_EXPIRED
-        params.start_time = ts.into();
+        // end_time already in the past — registration must fail with ORDER_EXPIRED.
+        // start_time can be anything; only end_time is validated at registration.
         params.end_time = (ts - 1).into();
         let order = Order { parameters: params, signature: erc20_erc1155_order_signature() };
         contracts.medialane.register_order(order);

@@ -10,8 +10,8 @@ pub mod errors {
     pub const ROYALTY_TRANSFER_FAILED: felt252 = 'Royalty transfer failed';
     pub const CALLER_NOT_OFFERER: felt252 = 'Caller not offerer';
     pub const CALLER_NOT_FULFILLER: felt252 = 'Caller not fulfiller';
-    pub const END_AMOUNT_MISMATCH: felt252 = 'End amount must equal start';
     pub const INVALID_OFFERER: felt252 = 'Offerer cannot be zero';
+    pub const SELF_FULFILLMENT: felt252 = 'Cannot fill own order';
     pub const INVALID_AMOUNT: felt252 = 'Amount must be nonzero';
     pub const INVALID_PRICE: felt252 = 'Price must be nonzero';
     pub const INVALID_NFT_CONTRACT: felt252 = 'NFT contract cannot be zero';

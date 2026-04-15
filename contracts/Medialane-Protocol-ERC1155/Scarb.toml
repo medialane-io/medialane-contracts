@@ -1,0 +1,26 @@
+[package]
+name = "medialane_erc1155"
+version = "0.1.0"
+edition = "2024_07"
+
+[dependencies]
+starknet = "2.11.4"
+openzeppelin_token = "2.0.0"
+openzeppelin_utils = "2.0.0"
+openzeppelin_access = "2.0.0"
+openzeppelin_introspection = "2.0.0"
+openzeppelin_account = "2.0.0"
+openzeppelin_upgrades = "2.0.0"
+
+[dev-dependencies]
+snforge_std_deprecated = "0.48.1"
+assert_macros = "2.11.4"
+
+[[target.starknet-contract]]
+sierra = true
+
+[scripts]
+test = "snforge test"
+
+[tool.scarb]
+allow-prebuilt-plugins = ["snforge_std_deprecated"]

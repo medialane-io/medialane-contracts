@@ -14,7 +14,7 @@ pub struct OrderCreated {
     pub payment_token: ContractAddress,
 }
 
-/// Emitted when an order is successfully fulfilled.
+/// Emitted when an order is (partially or fully) fulfilled.
 #[derive(Drop, starknet::Event)]
 pub struct OrderFulfilled {
     #[key]
@@ -23,6 +23,8 @@ pub struct OrderFulfilled {
     pub offerer: ContractAddress,
     #[key]
     pub fulfiller: ContractAddress,
+    pub quantity: felt252,
+    pub remaining_amount: felt252,
     pub royalty_receiver: ContractAddress,
     pub royalty_amount: u256,
 }

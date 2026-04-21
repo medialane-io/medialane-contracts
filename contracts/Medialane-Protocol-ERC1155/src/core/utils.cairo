@@ -17,9 +17,9 @@ pub const ORDER_PARAMETERS_TYPE_HASH: felt252 = selector!(
     "\"OrderParameters\"(\"offerer\":\"ContractAddress\",\"nft_contract\":\"ContractAddress\",\"token_id\":\"felt\",\"amount\":\"felt\",\"payment_token\":\"ContractAddress\",\"price_per_unit\":\"felt\",\"start_time\":\"felt\",\"end_time\":\"felt\",\"salt\":\"felt\",\"nonce\":\"felt\")"
 );
 
-// "OrderFulfillment"("order_hash":"felt","fulfiller":"ContractAddress","nonce":"felt")
+// "OrderFulfillment"("order_hash":"felt","fulfiller":"ContractAddress","quantity":"felt","nonce":"felt")
 pub const FULFILLMENT_TYPE_HASH: felt252 = selector!(
-    "\"OrderFulfillment\"(\"order_hash\":\"felt\",\"fulfiller\":\"ContractAddress\",\"nonce\":\"felt\")"
+    "\"OrderFulfillment\"(\"order_hash\":\"felt\",\"fulfiller\":\"ContractAddress\",\"quantity\":\"felt\",\"nonce\":\"felt\")"
 );
 
 // "OrderCancellation"("order_hash":"felt","offerer":"ContractAddress","nonce":"felt")

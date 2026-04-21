@@ -202,6 +202,43 @@ PATH="..." sncast --profile medialane-mainnet deploy \
 
 ---
 
+### Medialane-Protocol-ERC1155 (`contracts/Medialane-Protocol-ERC1155/`)
+
+ERC-1155 marketplace with partial fills. Redesigned and deployed 2026-04-20.
+
+- **Contract address**: `0x03aab04e806542cd88bfd0c5bb2a37334fd742d477a2e0f97af09aa4a36137ca`
+- **Class hash**: `0x6c7b47744ff1a99eacdfe0f097fdae9f5c45d0cf660ae5170b1e7d270c19313`
+- **Declare tx**: `0x34471831de2d90cfdcece30aa457127231b0153f8b7472aa233cfcbc535197`
+- **Deploy tx**: `0xabb28bd7056b8ad5465ef9eebdc691c013eb7808be7a1d948fde4308c75a4b`
+- **Manager (DEFAULT_ADMIN_ROLE)**: `mediolanoprotocol` (`0x4cc6df27c62aa4bf3dcfc8fe8c02a8473bd08a96ee7013c06fb8f4f847d5d7b`)
+- **Native token**: STRK (`0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d`)
+- **snfoundry.toml profile**: `medialane1155-mainnet`
+
+**Previous deployment**: `0x042005e9b85536072bfa260b95aa6aaef07f48e622031657384d2375195d7123` (broken — never emitted any OrderCreated events)
+
+**Key changes in this deployment (2026-04-20):**
+- Partial fills: buyer chooses `quantity` (1 ≤ Q ≤ remaining_amount); order stays `Created` until fully consumed
+- `OrderFulfillment` struct: added `quantity: felt252` between `fulfiller` and `nonce`
+- `OrderDetails` struct: `fulfiller: Option` removed; `remaining_amount: felt252` added
+- `FULFILLMENT_TYPE_HASH` updated to match new struct field order
+- New errors: `INVALID_QUANTITY`, `INSUFFICIENT_REMAINING`
+- `OrderFulfilled` event: added `quantity` + `remaining_amount` fields
+
+**Build + declare + deploy workflow:**
+```bash
+cd contracts/Medialane-Protocol-ERC1155
+PATH="/Users/kalamaha/.cargo/bin:/Users/kalamaha/.asdf/installs/scarb/2.11.4/bin:/Users/kalamaha/.local/bin:$PATH" \
+UNIVERSAL_SIERRA_COMPILER=/Users/kalamaha/.local/bin/universal-sierra-compiler \
+  scarb build
+
+PATH="..." sncast --profile medialane1155-mainnet declare --contract-name Medialane1155
+PATH="..." sncast --profile medialane1155-mainnet deploy \
+  --class-hash <new_class_hash> \
+  --arguments '0x4cc6df27c62aa4bf3dcfc8fe8c02a8473bd08a96ee7013c06fb8f4f847d5d7b, 0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d'
+```
+
+---
+
 ## Network Config (`snfoundry.toml`)
 
 ```toml

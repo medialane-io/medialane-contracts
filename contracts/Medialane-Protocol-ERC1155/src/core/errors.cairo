@@ -16,4 +16,6 @@ pub mod errors {
     pub const INVALID_PRICE: felt252 = 'Price must be nonzero';
     pub const INVALID_NFT_CONTRACT: felt252 = 'NFT contract cannot be zero';
     pub const ROYALTY_EXCEEDS_PRICE: felt252 = 'Royalty exceeds sale price';
+    pub const INVALID_QUANTITY: felt252 = 'Quantity must be nonzero';
+    pub const INSUFFICIENT_REMAINING: felt252 = 'Insufficient remaining units';
 }

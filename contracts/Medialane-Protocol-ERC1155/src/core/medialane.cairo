@@ -205,7 +205,7 @@ pub mod Medialane1155 {
                 start_time,
                 end_time,
                 order_status: OrderStatus::Created,
-                fulfiller: Option::None,
+                remaining_amount: params.amount,
             };
 
             self.orders.write(order_hash, order_details);
@@ -221,10 +221,13 @@ pub mod Medialane1155 {
             }));
         }
 
-        /// Fulfills a registered order.
+        /// Fulfills a registered order (partially or fully).
         ///
-        /// Validates the buyer's SNIP-12 signature, order timing, and executes:
-        ///   1. ERC-1155 safe_transfer_from (seller → buyer)
+        /// The buyer chooses `quantity` (1 ≤ quantity ≤ remaining_amount) and pays
+        /// `price_per_unit × quantity`. The order stays `Created` until all units are sold,
+        /// then transitions to `Filled`. Validates the buyer's SNIP-12 signature, order
+        /// timing, and executes:
+        ///   1. ERC-1155 safe_transfer_from (seller → buyer, `quantity` units)
         ///   2. ERC-2981 royalty payment (buyer → royalty_receiver, if applicable)
         ///   3. Remaining payment (buyer → seller)
         fn fulfill_order(ref self: ContractState, fulfillment_request: FulfillmentRequest) {
@@ -236,11 +239,19 @@ pub mod Medialane1155 {
             let mut order_details = self._assert_order_status(order_hash, OrderStatus::Created);
 
             let fulfiller = fulfillment_intent.fulfiller;
+            let quantity = fulfillment_intent.quantity;
 
             // Caller must be the fulfiller — prevents front-running via tx replay
             assert(get_caller_address() == fulfiller, errors::CALLER_NOT_FULFILLER);
             // Offerer cannot fill their own order
             assert(fulfiller != order_details.offerer, errors::SELF_FULFILLMENT);
+            // Quantity must be positive
+            assert(quantity != 0, errors::INVALID_QUANTITY);
+
+            // Validate quantity ≤ remaining_amount using u256 to avoid felt252 ordering pitfalls
+            let quantity_u256 = felt_to_u256(quantity);
+            let remaining_u256 = felt_to_u256(order_details.remaining_amount);
+            assert(quantity_u256 <= remaining_u256, errors::INSUFFICIENT_REMAINING);
 
             let fulfillment_hash = fulfillment_intent.get_message_hash(fulfiller);
             self._validate_hash_signature(fulfillment_hash, fulfiller, signature);
@@ -249,20 +260,30 @@ pub mod Medialane1155 {
 
             self.nonces.use_checked_nonce(fulfiller, fulfillment_intent.nonce);
 
-            // CEI: mark filled before external calls so a re-entrant ERC-1155
-            // onReceived callback cannot re-enter fulfill_order
-            order_details.order_status = OrderStatus::Filled;
-            order_details.fulfiller = Option::Some(fulfiller);
+            // Compute new remaining; transition to Filled only when fully consumed
+            let new_remaining_u256 = remaining_u256 - quantity_u256;
+            let new_remaining: felt252 = new_remaining_u256.try_into().unwrap();
+            let new_status = if new_remaining == 0 {
+                OrderStatus::Filled
+            } else {
+                OrderStatus::Created
+            };
+
+            // CEI: commit state before external calls to block re-entrant fill attempts
+            order_details.remaining_amount = new_remaining;
+            order_details.order_status = new_status;
             self.orders.write(order_hash, order_details);
 
             // Execute transfers (Interaction — after state committed)
             let (royalty_receiver, royalty_amount) = self
-                ._execute_transfers(order_details, fulfiller);
+                ._execute_transfers(order_details, fulfiller, quantity);
 
             self.emit(Event::OrderFulfilled(OrderFulfilled {
                 order_hash,
                 offerer: order_details.offerer,
                 fulfiller,
+                quantity,
+                remaining_amount: new_remaining,
                 royalty_receiver,
                 royalty_amount,
             }));
@@ -367,9 +388,9 @@ pub mod Medialane1155 {
             );
         }
 
-        /// Executes the three-step ERC-1155 trade:
-        ///   1. Transfer tokens from seller to buyer.
-        ///   2. Pay ERC-2981 royalty (if applicable) from buyer to royalty_receiver.
+        /// Executes the three-step ERC-1155 trade for `quantity` units:
+        ///   1. Transfer `quantity` tokens from seller to buyer.
+        ///   2. Pay ERC-2981 royalty on `price_per_unit × quantity` (if applicable).
         ///   3. Pay remaining price from buyer to seller.
         ///
         /// Returns (royalty_receiver, royalty_amount) for event emission.
@@ -377,10 +398,11 @@ pub mod Medialane1155 {
             ref self: ContractState,
             order: OrderDetails,
             fulfiller: ContractAddress,
+            quantity: felt252,
         ) -> (ContractAddress, u256) {
             let offerer = order.offerer;
             let token_id = felt_to_u256(order.token_id);
-            let amount = felt_to_u256(order.amount);
+            let amount = felt_to_u256(quantity);
             let price_per_unit = felt_to_u256(order.price_per_unit);
             let total_price = price_per_unit * amount;
 

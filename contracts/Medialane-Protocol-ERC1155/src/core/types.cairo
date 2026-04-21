@@ -60,32 +60,41 @@ pub struct OrderDetails {
     pub offerer: ContractAddress,
     pub nft_contract: ContractAddress,
     pub token_id: felt252,
+    /// Total units listed by the offerer.
     pub amount: felt252,
     pub payment_token: ContractAddress,
     pub price_per_unit: felt252,
     pub start_time: u64,
     pub end_time: u64,
     pub order_status: OrderStatus,
-    pub fulfiller: Option<ContractAddress>,
+    /// Units still available for purchase. Decremented on each partial fill.
+    pub remaining_amount: felt252,
 }
 
 // ---------------------------------------------------------------------------
 // OrderFulfillment — what the buyer signs when filling an order.
 // ---------------------------------------------------------------------------
-#[derive(Drop, Clone, Copy, Serde, Hash)]
+#[derive(Drop, Clone, Copy, Serde)]
 pub struct OrderFulfillment {
     /// Hash of the order being fulfilled.
     pub order_hash: felt252,
     /// Buyer address — caller must match this.
     pub fulfiller: ContractAddress,
+    /// Number of units the buyer wants to purchase (1 ≤ quantity ≤ remaining_amount).
+    pub quantity: felt252,
     /// Buyer's account nonce.
     pub nonce: felt252,
 }
 
 impl OrderFulfillmentHashImpl of StructHash<OrderFulfillment> {
     fn hash_struct(self: @OrderFulfillment) -> felt252 {
-        let hash_state = PoseidonTrait::new();
-        hash_state.update_with(FULFILLMENT_TYPE_HASH).update_with(*self).finalize()
+        let mut hash_state = PoseidonTrait::new();
+        hash_state = hash_state.update_with(FULFILLMENT_TYPE_HASH);
+        hash_state = hash_state.update_with(*self.order_hash);
+        hash_state = hash_state.update_with(*self.fulfiller);
+        hash_state = hash_state.update_with(*self.quantity);
+        hash_state = hash_state.update_with(*self.nonce);
+        hash_state.finalize()
     }
 }
 

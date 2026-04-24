@@ -26,10 +26,27 @@ sncast --profile nftcomments-mainnet invoke \
   --calldata <felts>
 ```
 
-**Important sncast 0.55.0 notes:**
+**Important sncast notes:**
+- Version in use: `0.59.0` (via asdf — run `~/.asdf/shims/sncast` if not in PATH)
 - `--fee-token` flag is NOT supported — omit it entirely (fee paid in ETH by default)
-- Account name in snfoundry.toml: `nftcomments-deployer` (not `deployer`)
-- If upgrade fails with "Caller is not the owner" — contract owner may be a different wallet than `nftcomments-deployer`. Use Starkscan "Write Contract" UI as the owner wallet instead.
+- If upgrade fails with "Caller is not the owner" — contract owner may be a different wallet. Use Starkscan "Write Contract" UI as the owner wallet instead.
+
+## Deployer Accounts
+
+| Name | Address | Purpose |
+|---|---|---|
+| `medialane-deployer` | `0x06acfcef048dcaac4a11fab313507d53145ed2a468f2a6188527918f1b12d935` | New mainnet deployer — fund with ~0.1 STRK before first deploy |
+| `mediolanoprotocol` | `0x4cc6df27c62aa4bf3dcfc8fe8c02a8473bd08a96ee7013c06fb8f4f847d5d7b` | Legacy admin — owner/admin role on all existing contracts |
+| `nftcomments-deployer` | see CLAUDE.md NFTComments section | NFTComments upgrade deployer |
+
+Accounts file: `/Users/medialane/.starknet_accounts/starknet_open_zeppelin_accounts.json`
+
+**Deploy a new account (one-time after funding):**
+```bash
+~/.asdf/shims/sncast account deploy \
+  --url "https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/tOTwt1ug3YNOsaPjinDvS" \
+  --name medialane-deployer
+```
 
 ---
 

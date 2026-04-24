@@ -15,9 +15,8 @@ pub trait IDropCollection<TContractState> {
 
     // ── Claim conditions (phase management) ──────────────────────────────────
 
-    fn set_claim_conditions(ref self: TContractState, conditions: ClaimConditions);
-    /// Atomically sets conditions + allowlist gate — use instead of separate calls
-    /// when transitioning between phases to avoid a claim window between the two txs.
+    /// Preferred phase transition: atomically updates conditions + allowlist gate
+    /// in one tx, eliminating the race window of calling both separately.
     fn set_phase(ref self: TContractState, conditions: ClaimConditions, allowlist_enabled: bool);
     fn get_claim_conditions(self: @TContractState) -> ClaimConditions;
 

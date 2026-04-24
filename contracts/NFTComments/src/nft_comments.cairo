@@ -1,5 +1,6 @@
 use starknet::ContractAddress;
-use openzeppelin_token::erc721::interface::{IERC721Dispatcher, IERC721DispatcherTrait};
+use openzeppelin_introspection::interface::{ISRC5Dispatcher, ISRC5DispatcherTrait};
+use openzeppelin_token::erc721::interface::{IERC721Dispatcher, IERC721DispatcherTrait, IERC721_ID};
 
 #[starknet::interface]
 trait INFTComments<TContractState> {
@@ -78,8 +79,14 @@ mod NFTComments {
             assert!(!nft_contract.is_zero(), "invalid nft contract");
             assert!(content.len() > 0, "comment cannot be empty");
             assert!(content.len() <= 1000, "comment too long");
-            // Verify the token exists — owner_of reverts on non-existent token IDs.
-            let _ = IERC721Dispatcher { contract_address: nft_contract }.owner_of(token_id);
+            // Verify token exists for ERC-721 contracts via SRC5 detection.
+            // ERC-1155 has no owner_of equivalent, so we accept comments without
+            // an existence check — non-existent token IDs are filtered off-chain.
+            let is_erc721 = ISRC5Dispatcher { contract_address: nft_contract }
+                .supports_interface(IERC721_ID);
+            if is_erc721 {
+                let _ = IERC721Dispatcher { contract_address: nft_contract }.owner_of(token_id);
+            }
             let caller = get_caller_address();
             let last_time = self.last_comment_time.read((nft_contract, token_id, caller));
             let now = get_block_timestamp();

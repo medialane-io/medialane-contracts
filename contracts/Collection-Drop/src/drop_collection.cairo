@@ -275,53 +275,14 @@ pub mod DropCollection {
 
         // ── Claim conditions ─────────────────────────────────────────────────
 
-        fn set_claim_conditions(ref self: ContractState, conditions: ClaimConditions) {
-            self.accesscontrol.assert_only_role(ORGANIZER_ROLE);
-            if conditions.price > 0 {
-                assert(!conditions.payment_token.is_zero(), 'Payment token required');
-            }
-            if conditions.end_time > 0 {
-                assert(conditions.end_time > conditions.start_time, 'end_time must be after start');
-            }
-            self.conditions.write(conditions.clone());
-            self
-                .emit(
-                    ClaimConditionsUpdated {
-                        drop_id: self.drop_id.read(),
-                        start_time: conditions.start_time,
-                        end_time: conditions.end_time,
-                        price: conditions.price,
-                        max_quantity_per_wallet: conditions.max_quantity_per_wallet,
-                        timestamp: get_block_timestamp(),
-                    },
-                );
-        }
-
-        /// Atomically transitions to a new phase: updates claim conditions AND allowlist gate
-        /// in one call, eliminating the race window that exists when the two are set separately.
+        /// Atomically transitions to a new phase: updates conditions + allowlist gate
+        /// in one tx, eliminating the race window of calling both separately.
         fn set_phase(
             ref self: ContractState, conditions: ClaimConditions, allowlist_enabled: bool,
         ) {
             self.accesscontrol.assert_only_role(ORGANIZER_ROLE);
-            if conditions.price > 0 {
-                assert(!conditions.payment_token.is_zero(), 'Payment token required');
-            }
-            if conditions.end_time > 0 {
-                assert(conditions.end_time > conditions.start_time, 'end_time must be after start');
-            }
-            self.conditions.write(conditions.clone());
+            self._apply_conditions(conditions);
             self.allowlist_enabled.write(allowlist_enabled);
-            self
-                .emit(
-                    ClaimConditionsUpdated {
-                        drop_id: self.drop_id.read(),
-                        start_time: conditions.start_time,
-                        end_time: conditions.end_time,
-                        price: conditions.price,
-                        max_quantity_per_wallet: conditions.max_quantity_per_wallet,
-                        timestamp: get_block_timestamp(),
-                    },
-                );
             self
                 .emit(
                     AllowlistEnabledChanged {
@@ -481,6 +442,29 @@ pub mod DropCollection {
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
+        /// Validates and writes new claim conditions. Shared by set_phase and
+        /// any future condition-only setters.
+        fn _apply_conditions(ref self: ContractState, conditions: ClaimConditions) {
+            if conditions.price > 0 {
+                assert(!conditions.payment_token.is_zero(), 'Payment token required');
+            }
+            if conditions.end_time > 0 {
+                assert(conditions.end_time > conditions.start_time, 'end_time must be after start');
+            }
+            self.conditions.write(conditions.clone());
+            self
+                .emit(
+                    ClaimConditionsUpdated {
+                        drop_id: self.drop_id.read(),
+                        start_time: conditions.start_time,
+                        end_time: conditions.end_time,
+                        price: conditions.price,
+                        max_quantity_per_wallet: conditions.max_quantity_per_wallet,
+                        timestamp: get_block_timestamp(),
+                    },
+                );
+        }
+
         /// Validates a claim request against all active conditions.
         fn _validate_claim(ref self: ContractState, claimer: ContractAddress, quantity: u256) {
             assert(!self.paused.read(), 'Drop is paused');
@@ -495,7 +479,9 @@ pub mod DropCollection {
                 assert(now <= conditions.end_time, 'Drop has ended');
             }
 
-            // Supply check
+            // Early supply check for a clear user-facing error before any state changes.
+            // _mint_batch performs the definitive adjacent check immediately before writing
+            // last_token_id, so there is no window between the two.
             let current = self.last_token_id.read();
             let max = self.max_supply.read();
             if max > 0 {

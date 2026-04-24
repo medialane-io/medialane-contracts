@@ -6,7 +6,8 @@ An on-chain comment system for NFTs on Starknet. Comments are emitted as `Commen
 
 | Network | Item | Address |
 |---|---|---|
-| Mainnet | `NFTComments` | `0x070edbfa68a870e8a69736db58906391dcd8fcf848ac80a72ac1bf9192d8e232` |
+| Mainnet | `NFTComments` (contract) | `0x070edbfa68a870e8a69736db58906391dcd8fcf848ac80a72ac1bf9192d8e232` |
+| Mainnet | `NFTComments` v2 class (current) | `0x00edfb3d2edac1192007613a247aead2de1a3923002f4dbef5bc2352636f7616` |
 | Mainnet | Owner | `0x05f9f8d300601199297b7ecd92928e1444a2556aa84c8544b8b513d2a18a65a2` |
 
 ---

@@ -359,7 +359,7 @@ fn test_admin_mint_bypasses_conditions() {
 // ── Phase update ──────────────────────────────────────────────────────────────
 
 #[test]
-fn test_organizer_can_update_conditions() {
+fn test_set_phase_updates_conditions() {
     let factory = deploy_factory();
     let drop = create_free_drop(factory, ADMIN());
 
@@ -372,9 +372,51 @@ fn test_organizer_can_update_conditions() {
     };
 
     start_cheat_caller_address(drop.contract_address, ADMIN());
-    drop.set_claim_conditions(new_conditions);
+    drop.set_phase(new_conditions, false);
     stop_cheat_caller_address(drop.contract_address);
 
     let conditions = drop.get_claim_conditions();
     assert(conditions.max_quantity_per_wallet == 1, 'Conditions not updated');
+}
+
+#[test]
+fn test_set_phase_atomically_enables_allowlist() {
+    let factory = deploy_factory();
+    let drop = create_free_drop(factory, ADMIN());
+
+    assert(!drop.is_allowlist_enabled(), 'Should start disabled');
+
+    let conditions = free_conditions();
+
+    start_cheat_caller_address(drop.contract_address, ADMIN());
+    // Single tx: update conditions AND enable allowlist gate
+    drop.set_phase(conditions, true);
+    drop.add_to_allowlist(MINTER1());
+    stop_cheat_caller_address(drop.contract_address);
+
+    assert(drop.is_allowlist_enabled(), 'Allowlist should be enabled');
+    assert(drop.is_allowlisted(MINTER1()), 'Minter1 should be allowlisted');
+
+    // MINTER2 cannot claim
+    start_cheat_caller_address(drop.contract_address, MINTER2());
+    // expect panic handled by the should_panic test below
+    stop_cheat_caller_address(drop.contract_address);
+}
+
+#[test]
+#[should_panic(expected: ('Not on allowlist',))]
+fn test_set_phase_allowlist_blocks_non_members() {
+    let factory = deploy_factory();
+    let drop = create_free_drop(factory, ADMIN());
+
+    let conditions = free_conditions();
+
+    start_cheat_caller_address(drop.contract_address, ADMIN());
+    drop.set_phase(conditions, true); // enable allowlist via set_phase
+    stop_cheat_caller_address(drop.contract_address);
+
+    // MINTER1 never added — should be blocked
+    start_cheat_caller_address(drop.contract_address, MINTER1());
+    drop.claim(1);
+    stop_cheat_caller_address(drop.contract_address);
 }

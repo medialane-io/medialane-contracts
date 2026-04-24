@@ -1,9 +1,22 @@
 use starknet::ContractAddress;
-use openzeppelin_introspection::interface::{ISRC5Dispatcher, ISRC5DispatcherTrait};
-use openzeppelin_token::erc721::interface::{IERC721Dispatcher, IERC721DispatcherTrait, IERC721_ID};
+
+// Minimal local interfaces for cross-contract calls — avoids OZ version coupling.
+// The function signatures match the ERC standards; any compliant contract will satisfy them.
+
+const IERC721_ID: felt252 = 0x33eb2f84c309543403fd69f0d0f363781ef06ef6faeb0131ff16ea3175bd943;
 
 #[starknet::interface]
-trait INFTComments<TContractState> {
+pub trait ISrc5<TContractState> {
+    fn supports_interface(self: @TContractState, interface_id: felt252) -> bool;
+}
+
+#[starknet::interface]
+pub trait IErc721OwnerOf<TContractState> {
+    fn owner_of(self: @TContractState, token_id: u256) -> ContractAddress;
+}
+
+#[starknet::interface]
+pub trait INFTComments<TContractState> {
     fn add_comment(
         ref self: TContractState,
         nft_contract: ContractAddress,
@@ -13,7 +26,7 @@ trait INFTComments<TContractState> {
 }
 
 #[starknet::interface]
-trait IUpgradeable<TContractState> {
+pub trait IUpgradeable<TContractState> {
     fn upgrade(ref self: TContractState, new_class_hash: starknet::ClassHash);
 }
 
@@ -24,6 +37,9 @@ mod NFTComments {
     use core::num::traits::Zero;
     use openzeppelin_upgrades::UpgradeableComponent;
     use openzeppelin_access::ownable::OwnableComponent;
+    use super::{ISrc5Dispatcher, ISrc5DispatcherTrait};
+    use super::{IErc721OwnerOfDispatcher, IErc721OwnerOfDispatcherTrait};
+    use super::IERC721_ID;
 
     component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
@@ -82,10 +98,11 @@ mod NFTComments {
             // Verify token exists for ERC-721 contracts via SRC5 detection.
             // ERC-1155 has no owner_of equivalent, so we accept comments without
             // an existence check — non-existent token IDs are filtered off-chain.
-            let is_erc721 = ISRC5Dispatcher { contract_address: nft_contract }
+            let is_erc721 = ISrc5Dispatcher { contract_address: nft_contract }
                 .supports_interface(IERC721_ID);
             if is_erc721 {
-                let _ = IERC721Dispatcher { contract_address: nft_contract }.owner_of(token_id);
+                let _ = IErc721OwnerOfDispatcher { contract_address: nft_contract }
+                    .owner_of(token_id);
             }
             let caller = get_caller_address();
             let last_time = self.last_comment_time.read((nft_contract, token_id, caller));

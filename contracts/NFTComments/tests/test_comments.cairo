@@ -8,7 +8,6 @@ use nft_comments::{INFTCommentsDispatcher, INFTCommentsDispatcherTrait};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const OWNER: felt252 = 0x1001;
 const COMMENTER: felt252 = 0x2001;
 const COMMENTER2: felt252 = 0x2002;
 // Any non-zero address — no external call is made to this address.
@@ -18,7 +17,6 @@ const TOKEN_ID: u256 = 1_u256;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn owner() -> ContractAddress { OWNER.try_into().unwrap() }
 fn commenter() -> ContractAddress { COMMENTER.try_into().unwrap() }
 fn commenter2() -> ContractAddress { COMMENTER2.try_into().unwrap() }
 fn nft() -> ContractAddress { NFT_CONTRACT.try_into().unwrap() }
@@ -26,9 +24,8 @@ fn nft2() -> ContractAddress { NFT_CONTRACT2.try_into().unwrap() }
 
 fn deploy_comments() -> INFTCommentsDispatcher {
     let class = declare("NFTComments").unwrap().contract_class();
-    let mut cd = array![];
-    owner().serialize(ref cd);
-    let (addr, _) = class.deploy(@cd).unwrap();
+    // No constructor args — immutable, ownerless contract.
+    let (addr, _) = class.deploy(@array![]).unwrap();
     INFTCommentsDispatcher { contract_address: addr }
 }
 

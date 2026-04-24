@@ -6,9 +6,9 @@ An on-chain comment system for NFTs on Starknet. Comments are emitted as `Commen
 
 | Network | Item | Address |
 |---|---|---|
-| Mainnet | `NFTComments` (contract) | `0x070edbfa68a870e8a69736db58906391dcd8fcf848ac80a72ac1bf9192d8e232` |
-| Mainnet | `NFTComments` v2 class (current) | `0x00edfb3d2edac1192007613a247aead2de1a3923002f4dbef5bc2352636f7616` |
-| Mainnet | Owner | `0x05f9f8d300601199297b7ecd92928e1444a2556aa84c8544b8b513d2a18a65a2` |
+| Mainnet | `NFTComments` v2 (current, immutable) | `0x024f97eb5abe659fb650bf162b5fc16501f8f3863a7369901ce6099462e62799` |
+| Mainnet | `NFTComments` v2 class hash | `0x05d1d8762ef27818d94e30e07db88b7654d7c34cb68b3f5cd7129ba2e423c4c8` |
+| Mainnet | `NFTComments` v1 (deprecated) | `0x070edbfa68a870e8a69736db58906391dcd8fcf848ac80a72ac1bf9192d8e232` |
 
 ---
 
@@ -57,10 +57,10 @@ The rate limit key is `(nft_contract, token_id, caller)`. A wallet must wait 60 
 
 ## Security Properties
 
-- **No external calls** — the contract makes no calls to `nft_contract` or any other address, eliminating all re-entrancy surfaces. Any compliant or non-compliant NFT contract is accepted.
+- **No external calls** — the contract makes no calls to `nft_contract` or any other address, eliminating all re-entrancy surfaces. Any address is accepted as `nft_contract`.
 - **CEI order** — rate limit is read, checked, and written before emitting the event; no state mutation after the effects phase.
 - **No on-chain storage of content** — content lives in events only; storage gas is O(1) per caller per token.
-- **Immutable comment history** — events are permanent on Starknet; the owner can upgrade contract logic but cannot delete or censor past `CommentAdded` events.
+- **Immutable** — no owner, no admin, no upgrade function. Zero external dependencies (pure `starknet = "2.18.0"`). Past `CommentAdded` events are permanent and uncensorable.
 
 ## Build & Test
 
@@ -72,14 +72,6 @@ PATH="$HOME/.asdf/shims:$PATH" snforge test
 
 Tests cover: input validation, rate limit boundaries (59s rejected / 60s allowed), per-token / per-nft-contract / per-caller independence, `comment_count` view, `comment_id` in emitted events.
 
-## Upgrade Workflow
+## Deploy Notes
 
-1. Modify the contract and rebuild: `scarb build`
-2. Declare the new class: `sncast --profile medialane-deployer declare --contract-name NFTComments`
-3. Call `upgrade(new_class_hash)` as the contract owner via Voyager "Write Contract" or:
-   ```bash
-   sncast --profile medialane-deployer invoke \
-     --contract-address 0x070edbfa68a870e8a69736db58906391dcd8fcf848ac80a72ac1bf9192d8e232 \
-     --function upgrade \
-     --calldata <new_class_hash>
-   ```
+When using `sncast` to interact with this contract, always pass `--nonce` explicitly if a prior transaction failed — sncast increments its local nonce cache on submission regardless of whether the transaction actually landed on-chain.

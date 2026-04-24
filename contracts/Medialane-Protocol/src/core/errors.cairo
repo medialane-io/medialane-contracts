@@ -19,6 +19,7 @@ pub mod errors {
     pub const INVALID_OFFERER: felt252 = 'Offerer cannot be zero';
     pub const UNSUPPORTED_TOKEN_STANDARD: felt252 = 'Unsupported token';
     pub const INVALID_AMOUNT: felt252 = 'Invalid amount';
+    pub const INVALID_TOKEN_ADDRESS: felt252 = 'Token address cannot be zero';
     pub const NATIVE_TRANSFER_FAILED: felt252 = 'STRK transfer failed';
     pub const INVALID_ORDER_LENGTHS: felt252 = 'Invalid item lengths';
     pub const HASH_SERIALIZATION_FAILED: felt252 = 'Hash serialization failed';

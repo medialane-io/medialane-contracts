@@ -523,16 +523,19 @@ pub mod Medialane {
                 },
                 ItemType::ERC20 => {
                     // Need allowance: `from` must approve this contract address
+                    assert(token != 0.try_into().unwrap(), errors::INVALID_TOKEN_ADDRESS);
                     let success = IERC20Dispatcher { contract_address: token }
                         .transfer_from(from, to, amount);
                     assert(success, errors::TRANSFER_FAILED);
                 },
                 ItemType::ERC721 => {
                     assert(amount == 1.into(), errors::INVALID_AMOUNT);
+                    assert(token != 0.try_into().unwrap(), errors::INVALID_TOKEN_ADDRESS);
                     // Need approval: `from` must setApprovalForAll for this contract address
                     IERC721Dispatcher { contract_address: token }.transfer_from(from, to, identifier);
                 },
                 ItemType::ERC1155 => {
+                    assert(token != 0.try_into().unwrap(), errors::INVALID_TOKEN_ADDRESS);
                     // Need approval: `from` must setApprovalForAll for this contract address
                     IERC1155Dispatcher { contract_address: token }
                         .safe_transfer_from(from, to, identifier, amount, array![].span());

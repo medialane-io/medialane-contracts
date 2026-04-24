@@ -18,4 +18,5 @@ pub mod errors {
     pub const ROYALTY_EXCEEDS_PRICE: felt252 = 'Royalty exceeds sale price';
     pub const INVALID_QUANTITY: felt252 = 'Quantity must be nonzero';
     pub const INSUFFICIENT_REMAINING: felt252 = 'Insufficient remaining units';
+    pub const PRICE_OVERFLOW: felt252 = 'Price overflow';
 }

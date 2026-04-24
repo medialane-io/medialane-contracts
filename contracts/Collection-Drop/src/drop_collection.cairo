@@ -195,15 +195,18 @@ pub mod DropCollection {
             let conditions = self.conditions.read();
             let total_cost = conditions.price * quantity;
 
-            // Collect payment before minting (checks-effects-interactions)
+            // CEI: effects (mint + accounting) before interaction (ERC-20 external call).
+            // If transfer_from reverts, the entire tx reverts — including the mint.
+            // Committing state first means a re-entrant call during transfer_from sees
+            // the updated supply and per-wallet count, blocking a double-claim.
+            let start_token_id = self._mint_batch(caller, quantity);
+
             if total_cost > 0 {
+                self.payments_received.write(self.payments_received.read() + total_cost);
                 let token = IERC20Dispatcher { contract_address: conditions.payment_token };
                 let success = token.transfer_from(caller, get_contract_address(), total_cost);
                 assert(success, 'Payment transfer failed');
-                self.payments_received.write(self.payments_received.read() + total_cost);
             }
-
-            let start_token_id = self._mint_batch(caller, quantity);
 
             self
                 .emit(
@@ -289,6 +292,41 @@ pub mod DropCollection {
                         end_time: conditions.end_time,
                         price: conditions.price,
                         max_quantity_per_wallet: conditions.max_quantity_per_wallet,
+                        timestamp: get_block_timestamp(),
+                    },
+                );
+        }
+
+        /// Atomically transitions to a new phase: updates claim conditions AND allowlist gate
+        /// in one call, eliminating the race window that exists when the two are set separately.
+        fn set_phase(
+            ref self: ContractState, conditions: ClaimConditions, allowlist_enabled: bool,
+        ) {
+            self.accesscontrol.assert_only_role(ORGANIZER_ROLE);
+            if conditions.price > 0 {
+                assert(!conditions.payment_token.is_zero(), 'Payment token required');
+            }
+            if conditions.end_time > 0 {
+                assert(conditions.end_time > conditions.start_time, 'end_time must be after start');
+            }
+            self.conditions.write(conditions.clone());
+            self.allowlist_enabled.write(allowlist_enabled);
+            self
+                .emit(
+                    ClaimConditionsUpdated {
+                        drop_id: self.drop_id.read(),
+                        start_time: conditions.start_time,
+                        end_time: conditions.end_time,
+                        price: conditions.price,
+                        max_quantity_per_wallet: conditions.max_quantity_per_wallet,
+                        timestamp: get_block_timestamp(),
+                    },
+                );
+            self
+                .emit(
+                    AllowlistEnabledChanged {
+                        drop_id: self.drop_id.read(),
+                        enabled: allowlist_enabled,
                         timestamp: get_block_timestamp(),
                     },
                 );
@@ -484,7 +522,15 @@ pub mod DropCollection {
         fn _mint_batch(
             ref self: ContractState, recipient: ContractAddress, quantity: u256,
         ) -> u256 {
-            let start_token_id = self.last_token_id.read() + 1;
+            // Definitive supply guard — adjacent to the state write so no window exists
+            // between the check and the effect regardless of which call path reaches here.
+            let current = self.last_token_id.read();
+            let max = self.max_supply.read();
+            if max > 0 {
+                assert(current + quantity <= max, 'Exceeds max supply');
+            }
+
+            let start_token_id = current + 1;
             let mut i: u256 = 0;
             loop {
                 if i >= quantity {

@@ -1,4 +1,5 @@
 use starknet::ContractAddress;
+use openzeppelin_token::erc721::interface::{IERC721Dispatcher, IERC721DispatcherTrait};
 
 #[starknet::interface]
 trait INFTComments<TContractState> {
@@ -37,7 +38,9 @@ mod NFTComments {
         upgradeable: UpgradeableComponent::Storage,
         #[substorage(v0)]
         ownable: OwnableComponent::Storage,
-        last_comment_time: starknet::storage::Map<ContractAddress, u64>,
+        // Key: (nft_contract, token_id, caller) — per-NFT rate limit prevents
+        // bypassing by spreading comments across different tokens.
+        last_comment_time: starknet::storage::Map<(ContractAddress, u256, ContractAddress), u64>,
     }
 
     #[event]
@@ -75,11 +78,13 @@ mod NFTComments {
             assert!(!nft_contract.is_zero(), "invalid nft contract");
             assert!(content.len() > 0, "comment cannot be empty");
             assert!(content.len() <= 1000, "comment too long");
+            // Verify the token exists — owner_of reverts on non-existent token IDs.
+            let _ = IERC721Dispatcher { contract_address: nft_contract }.owner_of(token_id);
             let caller = get_caller_address();
-            let last_time = self.last_comment_time.read(caller);
+            let last_time = self.last_comment_time.read((nft_contract, token_id, caller));
             let now = get_block_timestamp();
             assert!(now >= last_time + 60_u64, "rate limited: wait 60 seconds between comments");
-            self.last_comment_time.write(caller, now);
+            self.last_comment_time.write((nft_contract, token_id, caller), now);
             self.emit(CommentAdded {
                 nft_contract,
                 token_id,

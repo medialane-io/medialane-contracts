@@ -404,7 +404,9 @@ pub mod Medialane1155 {
             let token_id = felt_to_u256(order.token_id);
             let amount = felt_to_u256(quantity);
             let price_per_unit = felt_to_u256(order.price_per_unit);
-            let total_price = price_per_unit * amount;
+            // Cairo 2 u256 multiplication panics on overflow by default, but we add an
+            // explicit checked_mul to make the protection visible and auditable.
+            let total_price = price_per_unit.checked_mul(amount).expect(errors::PRICE_OVERFLOW);
 
             // Step 1: Transfer ERC-1155 tokens from seller to buyer.
             // Seller must have called setApprovalForAll(this_contract, true) on the ERC-1155.

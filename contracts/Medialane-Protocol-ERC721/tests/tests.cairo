@@ -1,24 +1,26 @@
 #[cfg(test)]
 mod test {
-    use core::result::ResultTrait;
-    use mediolano_core::core::events::*;
-    use mediolano_core::core::interface::{IMedialaneDispatcher, IMedialaneDispatcherTrait};
-    use mediolano_core::core::medialane::Medialane;
-    use mediolano_core::core::types::*;
-    use mediolano_core::core::utils::*;
-    use mediolano_core::mocks::erc1155::{IMockERC1155Dispatcher, IMockERC1155DispatcherTrait};
-    use mediolano_core::mocks::erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
-    use mediolano_core::mocks::erc721::{IMockERC721Dispatcher, IMockERC721DispatcherTrait};
+    use medialane_protocol::core::events::*;
+    use medialane_protocol::core::interface::{IMedialaneDispatcher, IMedialaneDispatcherTrait};
+    use medialane_protocol::core::medialane::Medialane;
+    use medialane_protocol::core::types::*;
+    use medialane_protocol::core::utils::*;
+    use medialane_protocol::mocks::erc1155::{IMockERC1155Dispatcher, IMockERC1155DispatcherTrait};
+    use medialane_protocol::mocks::erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
+    use medialane_protocol::mocks::erc721::{IMockERC721Dispatcher, IMockERC721DispatcherTrait};
     use openzeppelin_account::interface::AccountABIDispatcher;
     use openzeppelin_token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use openzeppelin_token::erc721::interface::{IERC721Dispatcher, IERC721DispatcherTrait};
-    use snforge_std_deprecated::{
+    use snforge_std::{
         CheatSpan, ContractClassTrait, DeclareResultTrait, EventSpyAssertionsTrait,
         cheat_caller_address, declare, spy_events, start_cheat_block_timestamp,
         stop_cheat_block_timestamp,
     };
     use starknet::{ContractAddress, get_block_timestamp};
 
+    // Pre-computed SNIP-12 signatures for the test accounts and order parameters below.
+    // Generated with StarknetJS against contract address 0x2a0626..., SNIP-12 v1, chain_id SN_MAIN.
+    // Regenerate if OrderParameters type string, SNIP-12 version, or test addresses change.
     fn erc20_erc721_signature() -> Array<felt252> {
         array![
             3454928433868771987793737319591141299303880296339125482430761070816410607020,
@@ -105,16 +107,14 @@ mod test {
         contract_address
     }
 
-    fn deploy_medialane(
-        native_token: ContractAddress, owner_adddress: ContractAddress,
-    ) -> IMedialaneDispatcher {
+    fn deploy_medialane(native_token: ContractAddress) -> IMedialaneDispatcher {
+        // Fixed address for deterministic SNIP-12 domain (contract address is part of domain).
         let expected_medialane_contract: ContractAddress =
             0x2a0626d1a71fab6c6cdcb262afc48bff92a6844700ebbd16297596e6c53da29
             .try_into()
             .unwrap();
 
         let mut constructor_calldata = array![];
-        owner_adddress.serialize(ref constructor_calldata);
         native_token.serialize(ref constructor_calldata);
         let contract_address = deploy_contract(
             "Medialane", @constructor_calldata, expected_medialane_contract,
@@ -149,6 +149,7 @@ mod test {
 
         IMockERC721Dispatcher { contract_address }
     }
+
     fn deploy_erc1155(owner: ContractAddress) -> IMockERC1155Dispatcher {
         let expected_erc1155: ContractAddress =
             0x07ca2d381f55b159ea4c80abf84d4343fde9989854a6be2f02585daae7d89d76
@@ -174,8 +175,8 @@ mod test {
 
     fn setup_contracts_and_accounts() -> (DeployedContracts, Accounts) {
         let accounts = setup_accounts();
-        let mut erc20_contract = deploy_erc20(accounts.owner);
-        let medialane_contract = deploy_medialane(erc20_contract.contract_address, accounts.owner);
+        let erc20_contract = deploy_erc20(accounts.owner);
+        let medialane_contract = deploy_medialane(erc20_contract.contract_address);
         let erc721_contract = deploy_erc721(accounts.owner);
         let erc1155_contract = deploy_erc1155(accounts.owner);
 
@@ -341,7 +342,6 @@ mod test {
 
         let offerer_initial_balance = Ierc20.balance_of(accounts.offerer);
 
-        // register
         mint_erc721(
             ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
         );
@@ -386,7 +386,6 @@ mod test {
 
         let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
 
-        // fulfill
         let order_fulfillment_intent = OrderFulfillment {
             order_hash, fulfiller: accounts.fulfiller, nonce: 0,
         };
@@ -418,7 +417,6 @@ mod test {
         assert_eq!(order_details.order_status, OrderStatus::Filled, "status mismatch");
         assert_eq!(order_details.fulfiller, Option::Some(accounts.fulfiller), "fulfiller mismatch");
 
-        // check balances
         let offerer_current_balance = Ierc20.balance_of(accounts.offerer);
         assert_eq!(
             offerer_initial_balance + felt_to_u256(ERC20_AMOUNT),
@@ -454,7 +452,6 @@ mod test {
     fn test_cancel_valid_order() {
         let (mut contracts, accounts) = setup_contracts_and_accounts();
 
-        // register
         mint_erc721(
             ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
         );
@@ -490,7 +487,6 @@ mod test {
 
         let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
 
-        // cancel
         let order_cancelation_intent = OrderCancellation {
             order_hash, offerer: accounts.offerer, nonce: 1,
         };
@@ -521,7 +517,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected: ('Invalid signature',))]
+    #[should_panic(expected: "Invalid signature")]
     fn test_register_revert_invalid_signature() {
         let (mut contracts, accounts) = setup_contracts_and_accounts();
         let offer = OfferItem {
@@ -553,11 +549,10 @@ mod test {
 
 
     #[test]
-    #[should_panic(expected: ('Invalid signature',))]
+    #[should_panic(expected: "Invalid signature")]
     fn test_fulfill_revert_invalid_signature() {
         let (mut contracts, accounts) = setup_contracts_and_accounts();
 
-        // register
         mint_erc721(
             ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
         );
@@ -591,7 +586,6 @@ mod test {
 
         let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
 
-        // fulfill
         let order_fulfillment_intent = OrderFulfillment {
             order_hash, fulfiller: accounts.fulfiller, nonce: 0,
         };
@@ -619,12 +613,12 @@ mod test {
 
         contracts.medialane.fulfill_order(fulfillment_request_with_invalid_signature);
     }
+
     #[test]
-    #[should_panic(expected: ('Order expired',))]
+    #[should_panic(expected: "Order expired")]
     fn test_fulfill_revert_expired() {
         let (mut contracts, accounts) = setup_contracts_and_accounts();
 
-        // register
         mint_erc721(
             ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
         );
@@ -658,7 +652,6 @@ mod test {
 
         let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
 
-        // fulfill
         let order_fulfillment_intent = OrderFulfillment {
             order_hash, fulfiller: accounts.fulfiller, nonce: 0,
         };
@@ -686,12 +679,12 @@ mod test {
 
         contracts.medialane.fulfill_order(fulfillment_request);
     }
+
     #[test]
-    #[should_panic(expected: ('Order not yet valid',))]
+    #[should_panic(expected: "Order not yet valid")]
     fn test_fulfill_revert_not_yet_valid() {
         let (mut contracts, accounts) = setup_contracts_and_accounts();
 
-        // register
         mint_erc721(
             ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
         );
@@ -725,7 +718,6 @@ mod test {
 
         let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
 
-        // fulfill
         let order_fulfillment_intent = OrderFulfillment {
             order_hash, fulfiller: accounts.fulfiller, nonce: 0,
         };
@@ -755,11 +747,10 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected: ('Order already filled',))]
+    #[should_panic(expected: "Order already filled")]
     fn test_fulfill_revert_already_filled() {
         let (mut contracts, accounts) = setup_contracts_and_accounts();
 
-        // register
         mint_erc721(
             ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
         );
@@ -800,7 +791,6 @@ mod test {
 
         let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
 
-        // fulfill
         let order_fulfillment_intent = OrderFulfillment {
             order_hash, fulfiller: accounts.fulfiller, nonce: 0,
         };
@@ -836,11 +826,10 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected: ('Order already filled',))]
+    #[should_panic(expected: "Order already filled")]
     fn test_cancel_revert_already_filled() {
         let (mut contracts, accounts) = setup_contracts_and_accounts();
 
-        // register
         mint_erc721(
             ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
         );
@@ -881,7 +870,6 @@ mod test {
 
         let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
 
-        // fulfill
         let order_fulfillment_intent = OrderFulfillment {
             order_hash, fulfiller: accounts.fulfiller, nonce: 0,
         };
@@ -909,7 +897,6 @@ mod test {
 
         contracts.medialane.fulfill_order(fulfillment_request);
 
-        // cancel
         let order_cancelation_intent = OrderCancellation {
             order_hash, offerer: accounts.offerer, nonce: 1,
         };
@@ -926,4 +913,3 @@ mod test {
         stop_cheat_block_timestamp(contracts.medialane.contract_address);
     }
 }
-

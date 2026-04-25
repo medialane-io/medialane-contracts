@@ -6,9 +6,8 @@ An on-chain comment system for NFTs on Starknet. Comments are emitted as `Commen
 
 | Network | Item | Address |
 |---|---|---|
-| Mainnet | `NFTComments` v2 (current, immutable) | `0x024f97eb5abe659fb650bf162b5fc16501f8f3863a7369901ce6099462e62799` |
-| Mainnet | `NFTComments` v2 class hash | `0x05d1d8762ef27818d94e30e07db88b7654d7c34cb68b3f5cd7129ba2e423c4c8` |
-| Mainnet | `NFTComments` v1 (deprecated) | `0x070edbfa68a870e8a69736db58906391dcd8fcf848ac80a72ac1bf9192d8e232` |
+| Mainnet | `NFTComments` contract | `0x024f97eb5abe659fb650bf162b5fc16501f8f3863a7369901ce6099462e62799` |
+| Mainnet | Class hash | `0x05d1d8762ef27818d94e30e07db88b7654d7c34cb68b3f5cd7129ba2e423c4c8` |
 
 ---
 
@@ -74,4 +73,4 @@ Tests cover: input validation, rate limit boundaries (59s rejected / 60s allowed
 
 ## Deploy Notes
 
-When using `sncast` to interact with this contract, always pass `--nonce` explicitly if a prior transaction failed — sncast increments its local nonce cache on submission regardless of whether the transaction actually landed on-chain.
+Constructor takes no arguments — the contract is fully permissionless with no owner or configuration.

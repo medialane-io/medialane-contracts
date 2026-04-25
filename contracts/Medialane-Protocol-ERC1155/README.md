@@ -13,11 +13,6 @@ A specialized on-chain marketplace for trading ERC-1155 IP assets on Starknet. B
 This contract is the ERC-1155 companion to `Medialane-Protocol` (which handles ERC-721 assets). It is designed to work with IP collections deployed via `IP-Programmable-ERC1155-Collections` (factory: `0x0459a9a3c04be5d884a038744f977dff019897264d4a281f9e0f87af417b3bec`).
 
 ---
-| `OrderStatus` after full fill | `Filled` | `Filled` |
-| `OrderFulfilled` event | no quantity/remaining | includes `quantity` + `remaining_amount` |
-| SNIP-12 `OrderFulfillment` type hash | `(order_hash, fulfiller, nonce)` | `(order_hash, fulfiller, quantity, nonce)` |
-
----
 
 ## Overview
 
@@ -276,7 +271,7 @@ At fulfillment the royalty is computed on `price_per_unit × quantity` (the actu
 "OrderParameters"("offerer":"ContractAddress","nft_contract":"ContractAddress","token_id":"felt","amount":"felt","payment_token":"ContractAddress","price_per_unit":"felt","start_time":"felt","end_time":"felt","salt":"felt","nonce":"felt")
 ```
 
-**OrderFulfillment** *(quantity added in v2)*
+**OrderFulfillment**
 ```
 "OrderFulfillment"("order_hash":"felt","fulfiller":"ContractAddress","quantity":"felt","nonce":"felt")
 ```
@@ -382,13 +377,12 @@ await buyerAccount.execute({
 ### 6. Sign and submit `OrderFulfillment` (buyer)
 
 ```ts
-// IMPORTANT: quantity is required in v2 — field order must match type hash exactly
 const fulfillmentTypes = {
   StarknetDomain: [ /* same as above */ ],
   OrderFulfillment: [
     { name: 'order_hash', type: 'felt' },
     { name: 'fulfiller', type: 'ContractAddress' },
-    { name: 'quantity', type: 'felt' },   // required — between fulfiller and nonce
+    { name: 'quantity', type: 'felt' },
     { name: 'nonce', type: 'felt' },
   ],
 };

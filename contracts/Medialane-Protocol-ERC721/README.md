@@ -96,5 +96,3 @@ Tests cover: register, fulfill, cancel, invalid signatures, expired orders, not-
 ## Deploy Notes
 
 Constructor takes a single argument: `native_token_address` (STRK on mainnet: `0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d`).
-
-When using `sncast`, always pass `--nonce` explicitly if a prior transaction failed — sncast increments its local nonce cache on submission regardless of whether the transaction landed on-chain.

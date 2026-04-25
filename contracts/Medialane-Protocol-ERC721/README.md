@@ -8,10 +8,9 @@ The core ERC-721 marketplace contract for Medialane on Starknet. Sellers sign `O
 
 | Network | Item | Address |
 |---|---|---|
-| Mainnet | `Medialane` v2 (current, immutable) | `0x004387e58d469f19332dd5d20846b10339ddc49ef208025ec7d5bef294a8daf3` |
-| Mainnet | Class hash v2 | `0x079225381275ff71a723f560419bbe4e69dad324622226fc6593298577b824bc` |
+| Mainnet | `Medialane` contract | `0x004387e58d469f19332dd5d20846b10339ddc49ef208025ec7d5bef294a8daf3` |
+| Mainnet | Class hash | `0x079225381275ff71a723f560419bbe4e69dad324622226fc6593298577b824bc` |
 | Mainnet | Native token (STRK) | `0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d` |
-| Mainnet | `Medialane` v1 (deprecated, had admin key) | `0x0234f4e8838801ebf01d7f4166d42aed9a55bc67c1301162decf9e2040e05f16` |
 
 ---
 

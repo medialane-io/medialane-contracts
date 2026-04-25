@@ -6,28 +6,13 @@ A specialized on-chain marketplace for trading ERC-1155 IP assets on Starknet. B
 
 | Network | Item | Address |
 |---|---|---|
-| Mainnet | `Medialane1155` v3 (current, immutable) | `0x035836932ba1d219e00b8e42cd9a433fb2b211a08edcaa8bae40232f335f777d` |
-| Mainnet | Class hash v3 | `0x05bfb6f85f5c205e640113c86776389f82522bbfaf6ccd2f7834fea484f45afb` |
-| Mainnet | `Medialane1155` v2 (deprecated, upgradeable) | `0x03aab04e806542cd88bfd0c5bb2a37334fd742d477a2e0f97af09aa4a36137ca` |
-| Mainnet | `Medialane1155` v1 (deprecated) | `0x042005e9b85536072bfa260b95aa6aaef07f48e622031657384d2375195d7123` |
+| Mainnet | `Medialane1155` contract | `0x035836932ba1d219e00b8e42cd9a433fb2b211a08edcaa8bae40232f335f777d` |
+| Mainnet | Class hash | `0x05bfb6f85f5c205e640113c86776389f82522bbfaf6ccd2f7834fea484f45afb` |
 | Mainnet | Native token (STRK) | `0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d` |
 
 This contract is the ERC-1155 companion to `Medialane-Protocol` (which handles ERC-721 assets). It is designed to work with IP collections deployed via `IP-Programmable-ERC1155-Collections` (factory: `0x0459a9a3c04be5d884a038744f977dff019897264d4a281f9e0f87af417b3bec`).
 
 ---
-
-## What Changed in v2 (partial fills)
-
-v2 introduces **partial fill support** — a buyer can purchase any quantity from 1 up to the full remaining supply in a single transaction. Orders stay `Created` (active) until all units are sold.
-
-Key changes from v1:
-
-| Area | v1 | v2 |
-|---|---|---|
-| `OrderDetails.fulfiller` | `Option<ContractAddress>` | removed |
-| `OrderDetails.remaining_amount` | — | `felt252` — units still available |
-| `OrderFulfillment.quantity` | — | `felt252` — units to buy |
-| `OrderStatus` after partial fill | `Filled` | `Created` (still active) |
 | `OrderStatus` after full fill | `Filled` | `Filled` |
 | `OrderFulfilled` event | no quantity/remaining | includes `quantity` + `remaining_amount` |
 | SNIP-12 `OrderFulfillment` type hash | `(order_hash, fulfiller, nonce)` | `(order_hash, fulfiller, quantity, nonce)` |

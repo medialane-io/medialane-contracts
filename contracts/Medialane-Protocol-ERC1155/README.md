@@ -6,9 +6,10 @@ A specialized on-chain marketplace for trading ERC-1155 IP assets on Starknet. B
 
 | Network | Item | Address |
 |---|---|---|
-| Mainnet | `Medialane1155` v2 (current) | `0x03aab04e806542cd88bfd0c5bb2a37334fd742d477a2e0f97af09aa4a36137ca` |
+| Mainnet | `Medialane1155` v3 (current, immutable) | `0x035836932ba1d219e00b8e42cd9a433fb2b211a08edcaa8bae40232f335f777d` |
+| Mainnet | Class hash v3 | `0x05bfb6f85f5c205e640113c86776389f82522bbfaf6ccd2f7834fea484f45afb` |
+| Mainnet | `Medialane1155` v2 (deprecated, upgradeable) | `0x03aab04e806542cd88bfd0c5bb2a37334fd742d477a2e0f97af09aa4a36137ca` |
 | Mainnet | `Medialane1155` v1 (deprecated) | `0x042005e9b85536072bfa260b95aa6aaef07f48e622031657384d2375195d7123` |
-| Mainnet | Manager (DEFAULT_ADMIN_ROLE) | `0x4cc6df27c62aa4bf3dcfc8fe8c02a8473bd08a96ee7013c06fb8f4f847d5d7b` |
 | Mainnet | Native token (STRK) | `0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d` |
 
 This contract is the ERC-1155 companion to `Medialane-Protocol` (which handles ERC-721 assets). It is designed to work with IP collections deployed via `IP-Programmable-ERC1155-Collections` (factory: `0x0459a9a3c04be5d884a038744f977dff019897264d4a281f9e0f87af417b3bec`).
@@ -58,9 +59,6 @@ All three actions require valid SNIP-12 signatures. Account nonces are consumed 
 | Component | Purpose |
 |---|---|
 | `NoncesComponent` | Per-account nonce tracking; consumed on register, fulfill, and cancel |
-| `AccessControlComponent` | `DEFAULT_ADMIN_ROLE` grants upgrade rights to the manager |
-| `UpgradeableComponent` | Contract is upgradeable by the manager |
-| `SRC5Component` | ERC-165-style interface introspection |
 
 ### SNIP-12 Domain
 
@@ -80,8 +78,7 @@ src/
     medialane.cairo       # main contract (Medialane1155)
     interface.cairo       # IMedialane1155 trait
     types.cairo           # OrderParameters, OrderDetails, OrderFulfillment, OrderCancellation, ...
-    utils.cairo           # SNIP-12 type hashes, felt conversion helpers
-    errors.cairo          # error string constants
+    utils.cairo           # SNIP-12 type hashes, felt conversion helpers, IERC2981_ID
     events.cairo          # OrderCreated, OrderFulfilled, OrderCancelled
   mocks/
     erc1155.cairo         # MockERC1155 with ERC-2981 support (tests only)

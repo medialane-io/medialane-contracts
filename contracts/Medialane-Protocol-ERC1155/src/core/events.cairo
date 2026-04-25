@@ -26,6 +26,8 @@ pub struct OrderFulfilled {
     pub quantity: felt252,
     pub remaining_amount: felt252,
     pub royalty_receiver: ContractAddress,
+    // u256 serialises as two felt252 words (low, high) in the event encoding.
+    // Indexers must read this field as a 2-word value, unlike the felt252 fields above.
     pub royalty_amount: u256,
 }
 

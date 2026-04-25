@@ -4,74 +4,47 @@
 //
 // Key differences from the ERC-721 Medialane Protocol:
 // - Orders are always ERC-1155 offer (token_id + amount) × STRK/ERC-20 consideration.
-// - Price is price_per_unit × amount (supports multi-unit sales).
+// - Price is price_per_unit × quantity (supports multi-unit / partial fills).
 // - ERC-2981 royalties are automatically distributed at fulfillment:
 //     buyer's payment is split → royalty_receiver (royalty) + offerer (remainder).
 // - Same SNIP-12 signature scheme, nonce consumption, and CEI pattern.
 //
+// Immutable — no owner, no admin role, no upgrade function.
+//
 // Compatible with IP-Programmable-ERC1155-Collections (deployed via IPCollectionFactory)
 // which implements both ERC-1155 and ERC-2981.
+//
+// Note on royalty compatibility: _get_royalty uses a low-level syscall to probe
+// supports_interface so that ERC-1155 contracts without SRC5 degrade gracefully
+// (royalties skipped) rather than causing fulfill_order to revert.
 
 #[starknet::contract]
 pub mod Medialane1155 {
-    use openzeppelin_access::accesscontrol::AccessControlComponent::InternalTrait;
-    use openzeppelin_access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
     use openzeppelin_account::interface::{ISRC6Dispatcher, ISRC6DispatcherTrait};
-    use openzeppelin_introspection::src5::SRC5Component;
     use openzeppelin_token::erc1155::interface::{IERC1155Dispatcher, IERC1155DispatcherTrait};
     use openzeppelin_token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
-    use openzeppelin_upgrades::interface::IUpgradeable;
-    use openzeppelin_upgrades::upgradeable::UpgradeableComponent;
     use openzeppelin_utils::cryptography::nonces::NoncesComponent;
     use openzeppelin_utils::snip12::{OffchainMessageHash, SNIP12Metadata};
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
     };
-    use starknet::{ClassHash, ContractAddress, get_block_timestamp, get_caller_address};
-    use core::num::traits::Zero;
-    use crate::core::errors::*;
-    use crate::core::events::*;
+    use starknet::{ContractAddress, get_block_timestamp, get_caller_address};
+    use core::num::traits::{CheckedMul, Zero};
     use crate::core::interface::IMedialane1155;
     use crate::core::types::*;
     use crate::core::utils::*;
 
     // -----------------------------------------------------------------------
-    // Inline interface definitions for ERC-2981 and SRC5 external queries.
-    // Defined here to avoid dependency on a specific OZ package import path.
-    // -----------------------------------------------------------------------
-
-    #[starknet::interface]
-    trait ISRC5Query<T> {
-        fn supports_interface(self: @T, interface_id: felt252) -> bool;
-    }
-
-    #[starknet::interface]
-    trait IERC2981<T> {
-        fn royalty_info(self: @T, token_id: u256, sale_price: u256) -> (ContractAddress, u256);
-    }
-
-    // -----------------------------------------------------------------------
-    // Components
+    // Inline ERC-2981 return type (ContractAddress, u256) — decoded manually
+    // from the raw syscall span to avoid a hard dependency on a specific OZ path.
     // -----------------------------------------------------------------------
 
     component!(path: NoncesComponent, storage: nonces, event: NoncesEvent);
-    component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
-    component!(path: AccessControlComponent, storage: accesscontrol, event: AccessControlEvent);
-    component!(path: SRC5Component, storage: src5, event: SRC5Event);
 
     #[abi(embed_v0)]
     impl NoncesImpl = NoncesComponent::NoncesImpl<ContractState>;
     impl NoncesInternalImpl = NoncesComponent::InternalImpl<ContractState>;
-
-    #[abi(embed_v0)]
-    impl SRC5Impl = SRC5Component::SRC5Impl<ContractState>;
-
-    #[abi(embed_v0)]
-    impl AccessControlImpl = AccessControlComponent::AccessControlImpl<ContractState>;
-    impl AccessControlInternalImpl = AccessControlComponent::InternalImpl<ContractState>;
-
-    impl UpgradeableInternalImpl = UpgradeableComponent::InternalImpl<ContractState>;
 
     // -----------------------------------------------------------------------
     // Storage
@@ -82,15 +55,10 @@ pub mod Medialane1155 {
         /// Order registry: order_hash → OrderDetails.
         orders: Map<felt252, OrderDetails>,
         /// STRK token address — used when payment_token == zero.
+        /// Immutable after construction — set once, never changed (no admin key).
         native_token_address: ContractAddress,
         #[substorage(v0)]
         nonces: NoncesComponent::Storage,
-        #[substorage(v0)]
-        upgradeable: UpgradeableComponent::Storage,
-        #[substorage(v0)]
-        src5: SRC5Component::Storage,
-        #[substorage(v0)]
-        accesscontrol: AccessControlComponent::Storage,
     }
 
     // -----------------------------------------------------------------------
@@ -105,13 +73,9 @@ pub mod Medialane1155 {
         OrderCancelled: OrderCancelled,
         #[flat]
         NoncesEvent: NoncesComponent::Event,
-        #[flat]
-        UpgradeableEvent: UpgradeableComponent::Event,
-        #[flat]
-        SRC5Event: SRC5Component::Event,
-        #[flat]
-        AccessControlEvent: AccessControlComponent::Event,
     }
+
+    use crate::core::events::*;
 
     // -----------------------------------------------------------------------
     // SNIP-12 domain
@@ -130,32 +94,10 @@ pub mod Medialane1155 {
     // Constructor
     // -----------------------------------------------------------------------
 
-    /// Deploys the Medialane1155 marketplace.
-    ///
-    /// # Arguments
-    /// * `manager`              - Address granted DEFAULT_ADMIN_ROLE (can upgrade the contract)
-    /// * `native_token_address` - STRK token contract address (used when payment_token == 0)
     #[constructor]
-    fn constructor(
-        ref self: ContractState,
-        manager: ContractAddress,
-        native_token_address: ContractAddress,
-    ) {
-        self.accesscontrol.initializer();
-        self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, manager);
+    fn constructor(ref self: ContractState, native_token_address: ContractAddress) {
+        assert!(!native_token_address.is_zero(), "Native token cannot be zero");
         self.native_token_address.write(native_token_address);
-    }
-
-    // -----------------------------------------------------------------------
-    // Upgradeable
-    // -----------------------------------------------------------------------
-
-    #[abi(embed_v0)]
-    impl UpgradeableImpl of IUpgradeable<ContractState> {
-        fn upgrade(ref self: ContractState, new_class_hash: ClassHash) {
-            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
-            self.upgradeable.upgrade(new_class_hash);
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -164,33 +106,25 @@ pub mod Medialane1155 {
 
     #[abi(embed_v0)]
     impl Medialane1155Impl of IMedialane1155<ContractState> {
-        /// Registers a new ERC-1155 sell order.
-        ///
-        /// Validates the offerer's SNIP-12 signature, order timing, and input sanity.
-        /// Consumes the offerer's nonce to prevent replay.
         fn register_order(ref self: ContractState, order: Order) {
             let params = order.parameters;
             let signature = order.signature;
             let offerer = params.offerer;
 
-            assert(!offerer.is_zero(), errors::INVALID_OFFERER);
-            assert(!params.nft_contract.is_zero(), errors::INVALID_NFT_CONTRACT);
-            assert(params.amount != 0, errors::INVALID_AMOUNT);
-            assert(params.price_per_unit != 0, errors::INVALID_PRICE);
-
-            // Fixed-price only: start_amount == end_amount (no Dutch auction)
-            // (amounts are the same field here — price_per_unit is immutable)
+            assert!(!offerer.is_zero(), "Offerer cannot be zero");
+            assert!(!params.nft_contract.is_zero(), "NFT contract cannot be zero");
+            assert!(params.amount != 0, "Amount must be nonzero");
+            assert!(params.price_per_unit != 0, "Price must be nonzero");
 
             let order_hash = params.get_message_hash(offerer);
 
-            // Cheap state check before the expensive SRC-6 external call
-            self._assert_order_status(order_hash, OrderStatus::None);
+            // Cheap state check before the expensive SRC-6 external call.
+            self._assert_order_status_none(order_hash);
 
             let start_time = felt_to_u64(params.start_time);
             let end_time = felt_to_u64(params.end_time);
-            self._validate_future_order(end_time);
+            self._validate_registration(start_time, end_time);
 
-            // Signature verification (external call) only after all cheap checks pass
             self._validate_hash_signature(order_hash, offerer, signature);
 
             self.nonces.use_checked_nonce(offerer, params.nonce);
@@ -221,37 +155,28 @@ pub mod Medialane1155 {
             }));
         }
 
-        /// Fulfills a registered order (partially or fully).
-        ///
-        /// The buyer chooses `quantity` (1 ≤ quantity ≤ remaining_amount) and pays
-        /// `price_per_unit × quantity`. The order stays `Created` until all units are sold,
-        /// then transitions to `Filled`. Validates the buyer's SNIP-12 signature, order
-        /// timing, and executes:
-        ///   1. ERC-1155 safe_transfer_from (seller → buyer, `quantity` units)
-        ///   2. ERC-2981 royalty payment (buyer → royalty_receiver, if applicable)
-        ///   3. Remaining payment (buyer → seller)
         fn fulfill_order(ref self: ContractState, fulfillment_request: FulfillmentRequest) {
             let fulfillment_intent = fulfillment_request.fulfillment;
             let signature = fulfillment_request.signature;
             let order_hash = fulfillment_intent.order_hash;
 
-            // Single storage read; reused for the rest of this function
-            let mut order_details = self._assert_order_status(order_hash, OrderStatus::Created);
+            // Single storage read; reused for the rest of this function.
+            let mut order_details = self._assert_order_status_created(order_hash);
 
             let fulfiller = fulfillment_intent.fulfiller;
             let quantity = fulfillment_intent.quantity;
 
-            // Caller must be the fulfiller — prevents front-running via tx replay
-            assert(get_caller_address() == fulfiller, errors::CALLER_NOT_FULFILLER);
-            // Offerer cannot fill their own order
-            assert(fulfiller != order_details.offerer, errors::SELF_FULFILLMENT);
-            // Quantity must be positive
-            assert(quantity != 0, errors::INVALID_QUANTITY);
+            // Caller must be the fulfiller — prevents front-running via tx replay.
+            assert!(get_caller_address() == fulfiller, "Caller not fulfiller");
+            // Offerer cannot fill their own order.
+            assert!(fulfiller != order_details.offerer, "Cannot fill own order");
+            assert!(quantity != 0, "Quantity must be nonzero");
 
-            // Validate quantity ≤ remaining_amount using u256 to avoid felt252 ordering pitfalls
+            // Use u256 for the comparison to avoid felt252 ordering pitfalls
+            // (felt252 ordering is field-element order, not natural number order).
             let quantity_u256 = felt_to_u256(quantity);
             let remaining_u256 = felt_to_u256(order_details.remaining_amount);
-            assert(quantity_u256 <= remaining_u256, errors::INSUFFICIENT_REMAINING);
+            assert!(quantity_u256 <= remaining_u256, "Insufficient remaining units");
 
             let fulfillment_hash = fulfillment_intent.get_message_hash(fulfiller);
             self._validate_hash_signature(fulfillment_hash, fulfiller, signature);
@@ -260,7 +185,7 @@ pub mod Medialane1155 {
 
             self.nonces.use_checked_nonce(fulfiller, fulfillment_intent.nonce);
 
-            // Compute new remaining; transition to Filled only when fully consumed
+            // Compute new remaining; transition to Filled only when all units are consumed.
             let new_remaining_u256 = remaining_u256 - quantity_u256;
             let new_remaining: felt252 = new_remaining_u256.try_into().unwrap();
             let new_status = if new_remaining == 0 {
@@ -270,11 +195,13 @@ pub mod Medialane1155 {
             };
 
             // CEI: commit state before external calls to block re-entrant fill attempts
+            // on the same order. The ERC-1155 safe_transfer_from triggers onERC1155Received
+            // on the fulfiller — at that point this order is already marked Filled/decremented,
+            // so any re-entrant attempt on this order will fail the status check.
             order_details.remaining_amount = new_remaining;
             order_details.order_status = new_status;
             self.orders.write(order_hash, order_details);
 
-            // Execute transfers (Interaction — after state committed)
             let (royalty_receiver, royalty_amount) = self
                 ._execute_transfers(order_details, fulfiller, quantity);
 
@@ -289,9 +216,6 @@ pub mod Medialane1155 {
             }));
         }
 
-        /// Cancels a registered order.
-        ///
-        /// Only the original offerer can cancel. Validates the offerer's SNIP-12 signature.
         fn cancel_order(ref self: ContractState, cancel_request: CancelRequest) {
             let cancelation_intent = cancel_request.cancelation;
             let signature = cancel_request.signature;
@@ -299,10 +223,10 @@ pub mod Medialane1155 {
             let offerer = cancelation_intent.offerer;
             let order_hash = cancelation_intent.order_hash;
 
-            let mut order_details = self._assert_order_status(order_hash, OrderStatus::Created);
+            let mut order_details = self._assert_order_status_created(order_hash);
 
-            // Verify the cancellation signer is the order's offerer
-            assert(offerer == order_details.offerer, errors::CALLER_NOT_OFFERER);
+            // Only the original offerer may cancel.
+            assert!(offerer == order_details.offerer, "Caller not offerer");
 
             let cancelation_hash = cancelation_intent.get_message_hash(offerer);
             self._validate_hash_signature(cancelation_hash, offerer, signature);
@@ -336,44 +260,53 @@ pub mod Medialane1155 {
     #[generate_trait]
     impl InternalFunctions of InternalFunctionsTrait {
         /// Validates an order at registration time.
-        /// Only rejects if the expiry has already passed — start_time is not checked
-        /// here because the tx may land in a later block than expected.
-        fn _validate_future_order(self: @ContractState, end_time: u64) {
+        /// Rejects if end_time has already passed, or if start_time >= end_time
+        /// (which would create a permanently unfulfillable order).
+        /// start_time is not required to be in the future — the tx may land later
+        /// than the block the offerer intended.
+        fn _validate_registration(self: @ContractState, start_time: u64, end_time: u64) {
             if end_time != 0 {
-                assert(get_block_timestamp() < end_time, errors::ORDER_EXPIRED);
+                assert!(get_block_timestamp() < end_time, "Order expired");
+                assert!(start_time < end_time, "Start time must precede end time");
             }
         }
 
         /// Validates that the current block is within the order's active window.
-        /// Used at fulfillment: start_time must have been reached and end_time not passed.
         fn _validate_active_order(self: @ContractState, start_time: u64, end_time: u64) {
             let now = get_block_timestamp();
-            assert(now >= start_time, errors::ORDER_NOT_YET_VALID);
+            assert!(now >= start_time, "Order not yet valid");
             if end_time != 0 {
-                assert(now < end_time, errors::ORDER_EXPIRED);
+                assert!(now < end_time, "Order expired");
             }
         }
 
-        /// Reads the order and asserts its status matches `expected`.
-        /// Returns the order so callers avoid a second storage read.
-        fn _assert_order_status(
-            self: @ContractState, order_hash: felt252, expected: OrderStatus,
+        /// Reads the order and asserts it has never been registered (status == None).
+        fn _assert_order_status_none(self: @ContractState, order_hash: felt252) {
+            let order_details = self.orders.read(order_hash);
+            match order_details.order_status {
+                OrderStatus::None => {},
+                OrderStatus::Created => panic!("Order already created"),
+                OrderStatus::Filled => panic!("Order already filled"),
+                OrderStatus::Cancelled => panic!("Order cancelled"),
+            }
+        }
+
+        /// Reads the order, asserts it is in Created status, and returns the details.
+        /// Callers reuse the returned struct to avoid a second storage read.
+        fn _assert_order_status_created(
+            self: @ContractState, order_hash: felt252,
         ) -> OrderDetails {
             let order_details = self.orders.read(order_hash);
-            let actual = order_details.order_status;
-            assert(
-                actual == expected,
-                match actual {
-                    OrderStatus::None => errors::ORDER_NOT_FOUND,
-                    OrderStatus::Created => errors::ORDER_ALREADY_CREATED,
-                    OrderStatus::Filled => errors::ORDER_ALREADY_FILLED,
-                    OrderStatus::Cancelled => errors::ORDER_CANCELLED,
-                },
-            );
+            match order_details.order_status {
+                OrderStatus::None => panic!("Order not found"),
+                OrderStatus::Created => {},
+                OrderStatus::Filled => panic!("Order already filled"),
+                OrderStatus::Cancelled => panic!("Order cancelled"),
+            }
             order_details
         }
 
-        /// Verifies a SNIP-12 signature using the signer's SRC-6 account.
+        /// Calls `is_valid_signature` on the signer's SRC-6 account contract.
         fn _validate_hash_signature(
             self: @ContractState,
             hash: felt252,
@@ -382,18 +315,16 @@ pub mod Medialane1155 {
         ) {
             let result = ISRC6Dispatcher { contract_address: signer }
                 .is_valid_signature(hash, signature);
-            assert(
+            assert!(
                 result == starknet::VALIDATED || result == 1,
-                errors::INVALID_SIGNATURE,
+                "Invalid signature",
             );
         }
 
         /// Executes the three-step ERC-1155 trade for `quantity` units:
         ///   1. Transfer `quantity` tokens from seller to buyer.
-        ///   2. Pay ERC-2981 royalty on `price_per_unit × quantity` (if applicable).
-        ///   3. Pay remaining price from buyer to seller.
-        ///
-        /// Returns (royalty_receiver, royalty_amount) for event emission.
+        ///   2. Pay ERC-2981 royalty on `price_per_unit × quantity` (if supported).
+        ///   3. Pay seller the remainder.
         fn _execute_transfers(
             ref self: ContractState,
             order: OrderDetails,
@@ -404,9 +335,10 @@ pub mod Medialane1155 {
             let token_id = felt_to_u256(order.token_id);
             let amount = felt_to_u256(quantity);
             let price_per_unit = felt_to_u256(order.price_per_unit);
-            // Cairo 2 u256 multiplication panics on overflow by default, but we add an
-            // explicit checked_mul to make the protection visible and auditable.
-            let total_price = price_per_unit.checked_mul(amount).expect(errors::PRICE_OVERFLOW);
+            let total_price: u256 = match price_per_unit.checked_mul(amount) {
+                Option::Some(v) => v,
+                Option::None => panic!("Price overflow"),
+            };
 
             // Step 1: Transfer ERC-1155 tokens from seller to buyer.
             // Seller must have called setApprovalForAll(this_contract, true) on the ERC-1155.
@@ -426,27 +358,28 @@ pub mod Medialane1155 {
                 ._get_royalty(order.nft_contract, token_id, total_price);
 
             if royalty_amount > 0 {
-                assert(royalty_amount <= total_price, errors::ROYALTY_EXCEEDS_PRICE);
+                assert!(royalty_amount <= total_price, "Royalty exceeds sale price");
                 let success = erc20.transfer_from(fulfiller, royalty_receiver, royalty_amount);
-                assert(success, errors::ROYALTY_TRANSFER_FAILED);
+                assert!(success, "Royalty transfer failed");
             }
 
             // Step 3: Pay seller the remainder.
             let seller_amount = total_price - royalty_amount;
             if seller_amount > 0 {
                 let success = erc20.transfer_from(fulfiller, offerer, seller_amount);
-                assert(success, errors::TRANSFER_FAILED);
+                assert!(success, "Transfer failed");
             }
 
             (royalty_receiver, royalty_amount)
         }
 
-        /// Queries ERC-2981 royalty from the NFT contract via SRC5 capability check.
+        /// Queries ERC-2981 royalty using low-level syscalls so that ERC-1155 contracts
+        /// without SRC5 gracefully return (zero, 0) instead of reverting.
         ///
-        /// Returns (zero_address, 0) if:
-        ///   - The NFT contract does not advertise IERC2981 via SRC5.
-        ///   - The royalty receiver is the zero address.
-        ///   - The royalty amount is zero.
+        /// Returns (zero_address, 0) when:
+        ///   - The NFT contract does not implement SRC5 (supports_interface entrypoint absent).
+        ///   - The contract does not advertise IERC2981 via SRC5.
+        ///   - The royalty receiver is the zero address or royalty amount is zero.
         fn _get_royalty(
             self: @ContractState,
             nft_contract: ContractAddress,
@@ -455,23 +388,66 @@ pub mod Medialane1155 {
         ) -> (ContractAddress, u256) {
             let zero: ContractAddress = 0.try_into().unwrap();
 
-            // Check SRC5 support before calling royalty_info to avoid panicking on
-            // ERC-1155 contracts that don't implement ERC-2981.
-            let supports = ISRC5QueryDispatcher { contract_address: nft_contract }
-                .supports_interface(IERC2981_ID);
+            // Probe supports_interface via raw syscall — non-SRC5 contracts return false
+            // instead of reverting the entire transaction.
+            let supports_calldata: Array<felt252> = array![IERC2981_ID];
+            let supports = match starknet::syscalls::call_contract_syscall(
+                nft_contract,
+                selector!("supports_interface"),
+                supports_calldata.span(),
+            ) {
+                Result::Ok(ret) => ret.len() > 0 && *ret.at(0) != 0,
+                Result::Err(_) => false,
+            };
 
             if !supports {
                 return (zero, 0);
             }
 
-            let (receiver, royalty_amount) = IERC2981Dispatcher { contract_address: nft_contract }
-                .royalty_info(token_id, sale_price);
+            // Call royalty_info(token_id: u256, sale_price: u256).
+            // u256 serialises as two felts: low then high.
+            let royalty_calldata: Array<felt252> = array![
+                token_id.low.into(),
+                token_id.high.into(),
+                sale_price.low.into(),
+                sale_price.high.into(),
+            ];
 
-            if receiver.is_zero() || royalty_amount == 0 {
-                return (zero, 0);
+            // Returns (ContractAddress, u256) = 3 felts: addr, low, high.
+            match starknet::syscalls::call_contract_syscall(
+                nft_contract,
+                selector!("royalty_info"),
+                royalty_calldata.span(),
+            ) {
+                Result::Ok(ret) => {
+                    if ret.len() < 3 {
+                        return (zero, 0);
+                    }
+                    let receiver: Option<ContractAddress> = (*ret.at(0)).try_into();
+                    match receiver {
+                        Option::None => (zero, 0),
+                        Option::Some(addr) => {
+                            if addr.is_zero() {
+                                return (zero, 0);
+                            }
+                            let low: Option<u128> = (*ret.at(1)).try_into();
+                            let high: Option<u128> = (*ret.at(2)).try_into();
+                            match (low, high) {
+                                (Option::Some(l), Option::Some(h)) => {
+                                    let royalty = u256 { low: l, high: h };
+                                    if royalty == 0 {
+                                        (zero, 0)
+                                    } else {
+                                        (addr, royalty)
+                                    }
+                                },
+                                _ => (zero, 0),
+                            }
+                        },
+                    }
+                },
+                Result::Err(_) => (zero, 0),
             }
-
-            (receiver, royalty_amount)
         }
     }
 }

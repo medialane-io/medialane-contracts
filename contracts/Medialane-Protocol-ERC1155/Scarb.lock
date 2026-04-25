@@ -3,15 +3,14 @@ version = 1
 
 [[package]]
 name = "medialane_erc1155"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "openzeppelin_access",
  "openzeppelin_account",
  "openzeppelin_introspection",
  "openzeppelin_token",
- "openzeppelin_upgrades",
  "openzeppelin_utils",
- "snforge_std_deprecated",
+ "snforge_std",
 ]
 
 [[package]]
@@ -52,28 +51,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "openzeppelin_upgrades"
-version = "2.0.0"
-source = "registry+https://scarbs.xyz/"
-checksum = "sha256:560d57a9c3f3ec5a476e82fec8963c93c8df63a4ff9ff134f64ab8383bde3c61"
-
-[[package]]
 name = "openzeppelin_utils"
 version = "2.0.0"
 source = "registry+https://scarbs.xyz/"
 checksum = "sha256:bf799c794139837f397975ffdf6a7ed5032d198bbf70e87a8f44f144a9dfc505"
 
 [[package]]
-name = "snforge_scarb_plugin_deprecated"
-version = "0.48.1"
+name = "snforge_scarb_plugin"
+version = "0.59.0"
 source = "registry+https://scarbs.xyz/"
-checksum = "sha256:8b822345a82a4479cfbf8e605a4cd25c0a622585fd5640c4add524c5da5a8b55"
+checksum = "sha256:871fba677c03b66a1bf40815dac0ab1b385eb1b9be6e6c3cf2ad9788eeb2b6bb"
 
 [[package]]
-name = "snforge_std_deprecated"
-version = "0.48.1"
+name = "snforge_std"
+version = "0.59.0"
 source = "registry+https://scarbs.xyz/"
-checksum = "sha256:da9e4a8bbf8ba5f85e91e4b37a967b10eca0cb377a505eb7a8f37d0df721a874"
+checksum = "sha256:3620924fa08bd2d740b2b5b01ef86c8dab3d4b9c2206387c8dbdc8d2ec15133e"
 dependencies = [
- "snforge_scarb_plugin_deprecated",
+ "snforge_scarb_plugin",
 ]

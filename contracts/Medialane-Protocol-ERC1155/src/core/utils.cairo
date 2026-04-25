@@ -27,7 +27,11 @@ pub const CANCELATION_TYPE_HASH: felt252 = selector!(
     "\"OrderCancellation\"(\"order_hash\":\"felt\",\"offerer\":\"ContractAddress\",\"nonce\":\"felt\")"
 );
 
-/// ERC-2981 interface ID (from OZ Cairo v0.20.0)
+/// ERC-2981 interface ID — Starknet SNIP-5 value from OpenZeppelin Cairo.
+/// Source: openzeppelin_token::erc2981::interface::IERC2981_ID
+/// Verified against OZ Cairo 2.0.0 source; value is the Poseidon hash of the
+/// interface selector string. If royalties are never distributed, check this
+/// constant first — a wrong value silently returns (zero, 0) for every NFT.
 pub const IERC2981_ID: felt252 = 0x2d3414e45a8700c29f119a54b9f11dca0e29e06ddcb214018fc37340e165d6b;
 
 pub fn felt_to_u64(value: felt252) -> u64 {

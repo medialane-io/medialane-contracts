@@ -113,8 +113,12 @@ pub struct OrderCancellation {
 
 impl OrderCancellationHashImpl of StructHash<OrderCancellation> {
     fn hash_struct(self: @OrderCancellation) -> felt252 {
-        let hash_state = PoseidonTrait::new();
-        hash_state.update_with(CANCELATION_TYPE_HASH).update_with(*self).finalize()
+        let mut hash_state = PoseidonTrait::new();
+        hash_state = hash_state.update_with(CANCELATION_TYPE_HASH);
+        hash_state = hash_state.update_with(*self.order_hash);
+        hash_state = hash_state.update_with(*self.offerer);
+        hash_state = hash_state.update_with(*self.nonce);
+        hash_state.finalize()
     }
 }
 

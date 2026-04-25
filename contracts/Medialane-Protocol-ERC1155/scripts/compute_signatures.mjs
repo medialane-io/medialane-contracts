@@ -25,6 +25,7 @@ const FULFILLER_PRIVATE_KEY = '0xdeadbeef1234';
 
 // ---------------------------------------------------------------------------
 // Fixed contract addresses (from deploy_at in tests/tests.cairo)
+// Constructor: constructor(native_token_address: ContractAddress) — no manager.
 // ---------------------------------------------------------------------------
 const MEDIALANE_ADDRESS = '0x2a0626d1a71fab6c6cdcb262afc48bff92a6844700ebbd16297596e6c53da29';
 const ERC20_ADDRESS     = '0x0589edc6e13293530fec9cad58787ed8cff1fce35c3ef80342b7b00651e04d1f';
@@ -89,6 +90,7 @@ const allTypes = {
   OrderFulfillment: [
     { name: 'order_hash', type: 'felt' },
     { name: 'fulfiller',  type: 'ContractAddress' },
+    { name: 'quantity',   type: 'felt' },
     { name: 'nonce',      type: 'felt' },
   ],
   OrderCancellation: [
@@ -136,9 +138,21 @@ console.log('Match    :', BigInt(computedOrderHash) === BigInt(EXPECTED_ORDER_HA
 // ---------------------------------------------------------------------------
 // Fulfillment hash
 // ---------------------------------------------------------------------------
+// Full fill: quantity = TOKEN_AMOUNT = 10 units, nonce = 0
 const fulfillmentMessage = {
   order_hash: computedOrderHash,
   fulfiller:  FULFILLER_ADDRESS,
+  quantity:   '10',
+  nonce:      '0',
+};
+
+// Partial fill: quantity = 5 units, nonce = 0 (different fulfiller nonce not needed
+// because the fulfiller nonce is consumed — but for a single partial-fill test the
+// fulfiller starts with nonce 0, so we sign nonce 0 with quantity 5)
+const partialFulfillmentMessage = {
+  order_hash: computedOrderHash,
+  fulfiller:  FULFILLER_ADDRESS,
+  quantity:   '5',
   nonce:      '0',
 };
 
@@ -148,16 +162,24 @@ const fulfillmentTypedData = {
   primaryType: 'OrderFulfillment',
   message: fulfillmentMessage,
 };
-
 const fulfillmentHash = typedData.getMessageHash(fulfillmentTypedData, FULFILLER_ADDRESS);
+
+const partialFulfillmentTypedData = {
+  domain,
+  types: { StarknetDomain: allTypes.StarknetDomain, OrderFulfillment: allTypes.OrderFulfillment },
+  primaryType: 'OrderFulfillment',
+  message: partialFulfillmentMessage,
+};
+const partialFulfillmentHash = typedData.getMessageHash(partialFulfillmentTypedData, FULFILLER_ADDRESS);
 
 // ---------------------------------------------------------------------------
 // Cancellation hash
 // ---------------------------------------------------------------------------
+// nonce = 1 because offerer nonce 0 is consumed at register_order.
 const cancellationMessage = {
   order_hash: computedOrderHash,
   offerer:    OFFERER_ADDRESS,
-  nonce:      '0',
+  nonce:      '1',
 };
 
 const cancellationTypedData = {
@@ -177,9 +199,10 @@ function sign(privateKeyHex, msgHash) {
   return { r: num.toHex(sig.r), s: num.toHex(sig.s) };
 }
 
-const orderSig        = sign(OFFERER_PRIVATE_KEY,   computedOrderHash);
-const fulfillmentSig  = sign(FULFILLER_PRIVATE_KEY, fulfillmentHash);
-const cancellationSig = sign(OFFERER_PRIVATE_KEY,   cancellationHash);
+const orderSig               = sign(OFFERER_PRIVATE_KEY,   computedOrderHash);
+const fulfillmentSig         = sign(FULFILLER_PRIVATE_KEY, fulfillmentHash);
+const partialFulfillmentSig  = sign(FULFILLER_PRIVATE_KEY, partialFulfillmentHash);
+const cancellationSig        = sign(OFFERER_PRIVATE_KEY,   cancellationHash);
 
 // ---------------------------------------------------------------------------
 // Verify signatures locally before printing
@@ -245,6 +268,13 @@ console.log(`
         array![
             ${fulfillmentSig.r},
             ${fulfillmentSig.s},
+        ]
+    }
+
+    fn erc20_erc1155_partial_fulfillment_signature() -> Array<felt252> {
+        array![
+            ${partialFulfillmentSig.r},
+            ${partialFulfillmentSig.s},
         ]
     }
 

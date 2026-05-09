@@ -67,13 +67,11 @@ pub mod Medialane {
 
             assert!(!offerer.is_zero(), "Offerer cannot be zero");
 
-            let offer_type_valid: Option<ItemType> = order_parameters.offer.item_type.try_into();
-            assert!(offer_type_valid.is_some(), "Invalid item type");
-            let consideration_type_valid: Option<ItemType> = order_parameters
-                .consideration
-                .item_type
+            let offer_type: Option<ItemType> = order_parameters.offer.item_type.try_into();
+            assert!(offer_type.is_some(), "Invalid item type");
+            let consideration_type: Option<ItemType> = order_parameters.consideration.item_type
                 .try_into();
-            assert!(consideration_type_valid.is_some(), "Invalid item type");
+            assert!(consideration_type.is_some(), "Invalid item type");
 
             // Fixed price only — Dutch auction interpolation is not supported.
             assert!(
@@ -94,7 +92,9 @@ pub mod Medialane {
 
             let start_time = felt_to_u64(order_parameters.start_time);
             let end_time = felt_to_u64(order_parameters.end_time);
-            self._validate_future_order(start_time, end_time);
+            self._validate_registration_window(start_time, end_time);
+            self._validate_item(order_parameters.offer, offer_type.unwrap());
+            self._validate_consideration(order_parameters.consideration, consideration_type.unwrap());
 
             self._validate_hash_signature(order_hash, offerer, signature);
 
@@ -128,6 +128,8 @@ pub mod Medialane {
             let mut order_details = self._assert_order_status_created(order_hash);
 
             let fulfiller = fulfillment_intent.fulfiller;
+
+            assert!(!fulfiller.is_zero(), "Fulfiller cannot be zero");
 
             // Caller must be the fulfiller — prevents front-running via mempool replay.
             assert!(get_caller_address() == fulfiller, "Caller not fulfiller");
@@ -204,11 +206,11 @@ pub mod Medialane {
 
     #[generate_trait]
     impl InternalFunctions of InternalFunctionsTrait {
-        /// Asserts current timestamp is at or before start_time (used during registration).
-        fn _validate_future_order(self: @ContractState, start_time: u64, end_time: u64) {
+        /// Registration is allowed any time before expiry, but active windows must still be valid.
+        fn _validate_registration_window(self: @ContractState, start_time: u64, end_time: u64) {
             let now = get_block_timestamp();
-            assert!(now <= start_time, "Order not yet valid");
             if end_time != 0 {
+                assert!(start_time < end_time, "Invalid time window");
                 assert!(now < end_time, "Order expired");
             }
         }
@@ -260,6 +262,44 @@ pub mod Medialane {
             assert!(
                 result == starknet::VALIDATED || result == 1, "Invalid signature",
             );
+        }
+
+        fn _validate_item(self: @ContractState, item: OfferItem, item_type: ItemType) {
+            match item_type {
+                ItemType::NATIVE => {
+                    assert!(item.token.is_zero(), "Token address must be zero");
+                    assert!(item.identifier_or_criteria == 0, "Invalid identifier");
+                    assert!(item.start_amount != 0, "Invalid amount");
+                },
+                ItemType::ERC20 => {
+                    assert!(!item.token.is_zero(), "Token address cannot be zero");
+                    assert!(item.identifier_or_criteria == 0, "Invalid identifier");
+                    assert!(item.start_amount != 0, "Invalid amount");
+                },
+                ItemType::ERC721 => {
+                    assert!(!item.token.is_zero(), "Token address cannot be zero");
+                    assert!(item.start_amount == 1, "Invalid amount");
+                    assert!(item.end_amount == 1, "Invalid amount");
+                },
+                ItemType::ERC1155 => {
+                    assert!(!item.token.is_zero(), "Token address cannot be zero");
+                    assert!(item.start_amount != 0, "Invalid amount");
+                },
+            }
+        }
+
+        fn _validate_consideration(
+            self: @ContractState, consideration: ConsiderationItem, item_type: ItemType,
+        ) {
+            assert!(!consideration.recipient.is_zero(), "Recipient cannot be zero");
+            let item = OfferItem {
+                item_type: consideration.item_type,
+                token: consideration.token,
+                identifier_or_criteria: consideration.identifier_or_criteria,
+                start_amount: consideration.start_amount,
+                end_amount: consideration.end_amount,
+            };
+            self._validate_item(item, item_type);
         }
 
         /// Transfers offered asset offerer→fulfiller and consideration fulfiller→recipient.

@@ -17,10 +17,15 @@ pub mod errors {
     pub const CALLER_NOT_FULFILLER: felt252 = 'Caller not fulfiller';
     pub const END_AMOUNT_MISMATCH: felt252 = 'End amount must equal start';
     pub const INVALID_OFFERER: felt252 = 'Offerer cannot be zero';
+    pub const INVALID_FULFILLER: felt252 = 'Fulfiller cannot be zero';
+    pub const INVALID_RECIPIENT: felt252 = 'Recipient cannot be zero';
     pub const UNSUPPORTED_TOKEN_STANDARD: felt252 = 'Unsupported token';
     pub const INVALID_AMOUNT: felt252 = 'Invalid amount';
     pub const INVALID_TOKEN_ADDRESS: felt252 = 'Token address cannot be zero';
+    pub const NONZERO_NATIVE_TOKEN: felt252 = 'Token address must be zero';
+    pub const INVALID_IDENTIFIER: felt252 = 'Invalid identifier';
     pub const NATIVE_TRANSFER_FAILED: felt252 = 'STRK transfer failed';
     pub const INVALID_ORDER_LENGTHS: felt252 = 'Invalid item lengths';
     pub const HASH_SERIALIZATION_FAILED: felt252 = 'Hash serialization failed';
+    pub const INVALID_TIME_WINDOW: felt252 = 'Invalid time window';
 }

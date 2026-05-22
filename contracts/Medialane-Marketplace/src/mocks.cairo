@@ -27,6 +27,25 @@ pub mod MockRoyaltyCollection {
     }
 }
 
+/// An SRC-6 account that accepts every signature as valid. Used to drive the
+/// marketplace's signature-verification path without real signing.
+#[starknet::contract]
+pub mod MockAccount {
+    #[storage]
+    struct Storage {}
+
+    #[abi(per_item)]
+    #[generate_trait]
+    pub impl ExternalImpl of ExternalTrait {
+        #[external(v0)]
+        fn is_valid_signature(
+            self: @ContractState, hash: felt252, signature: Array<felt252>,
+        ) -> felt252 {
+            starknet::VALIDATED
+        }
+    }
+}
+
 /// A collection that does not declare ERC-2981 — `supports_interface` is false
 /// for every id.
 #[starknet::contract]

@@ -96,6 +96,27 @@ pub enum OrderStatus {
     Cancelled,
 }
 
+/// Calldata wrapper: an order's parameters plus the offerer's SNIP-12 signature.
+#[derive(Drop, Serde)]
+pub struct Order {
+    pub parameters: OrderParameters,
+    pub signature: Array<felt252>,
+}
+
+/// Calldata wrapper for the `fulfill_order` entrypoint.
+#[derive(Drop, Serde)]
+pub struct FulfillmentRequest {
+    pub fulfillment: OrderFulfillment,
+    pub signature: Array<felt252>,
+}
+
+/// Calldata wrapper for the `cancel_order` entrypoint.
+#[derive(Drop, Serde)]
+pub struct CancelRequest {
+    pub cancellation: OrderCancellation,
+    pub signature: Array<felt252>,
+}
+
 /// The on-chain record written when an order is registered.
 #[derive(Drop, Copy, Serde, starknet::Store)]
 pub struct OrderDetails {

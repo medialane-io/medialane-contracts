@@ -1,32 +1,24 @@
 //! Shared settlement math for the Medialane marketplace contracts.
 //!
-//! Both the ERC-721 and ERC-1155 marketplaces import this module so the fee and
-//! royalty split can never diverge between them.
+//! Both the ERC-721 and ERC-1155 marketplaces import this module so the royalty
+//! handling can never diverge between them.
+//!
+//! The marketplace is zero-fee — there is no platform cut anywhere here. The
+//! only deduction from a sale is the creator's ERC-2981 royalty, which is the
+//! creator's money, not a marketplace fee.
 
 use starknet::ContractAddress;
 use starknet::syscalls::call_contract_syscall;
 use core::num::traits::Zero;
-use crate::constants::{FEE_BPS, FEE_DENOMINATOR, IERC2981_ID};
+use crate::constants::IERC2981_ID;
 
-/// Returns the marketplace fee owed on a gross sale amount.
-///
-/// Integer division truncates — the rounding remainder stays with the seller
-/// (see `compute_split`), so no value is lost.
-pub fn compute_fee(sale_amount: u256) -> u256 {
-    sale_amount * FEE_BPS / FEE_DENOMINATOR
-}
-
-/// Splits a gross sale amount into `(marketplace_fee, seller_proceeds)` given the
-/// royalty already computed for the sale.
-///
-/// Reverts with a clean reason if `fee + royalty` would exceed the sale amount
-/// (e.g. a collection reporting an abusive royalty) — without the guard the bare
-/// `u256` subtraction would underflow-panic with an opaque message.
-pub fn compute_split(sale_amount: u256, royalty_amount: u256) -> (u256, u256) {
-    let fee = compute_fee(sale_amount);
-    assert(fee + royalty_amount <= sale_amount, 'fee+royalty exceeds sale');
-    let seller_amount = sale_amount - fee - royalty_amount;
-    (fee, seller_amount)
+/// Returns the seller's proceeds for a sale: the gross amount minus the creator
+/// royalty. Reverts with a clean reason if the royalty would exceed the sale
+/// amount (e.g. a collection reporting an abusive royalty) — without the guard
+/// the bare `u256` subtraction would underflow-panic with an opaque message.
+pub fn seller_proceeds(sale_amount: u256, royalty_amount: u256) -> u256 {
+    assert(royalty_amount <= sale_amount, 'royalty exceeds sale');
+    sale_amount - royalty_amount
 }
 
 /// Best-effort ERC-2981 royalty lookup for a traded collection.

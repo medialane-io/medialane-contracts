@@ -9,7 +9,14 @@
 //! consumed-fulfillment-hash map, and per-order uniqueness is `salt`. Dropping
 //! the sequential nonce is review finding F1.
 
+use core::hash::{HashStateExTrait, HashStateTrait};
+use core::poseidon::PoseidonTrait;
+use openzeppelin_utils::snip12::StructHash;
 use starknet::ContractAddress;
+use crate::utils::{
+    CANCELLATION_TYPE_HASH, CONSIDERATION_ITEM_TYPE_HASH, FULFILLMENT_TYPE_HASH,
+    OFFER_ITEM_TYPE_HASH, ORDER_PARAMETERS_TYPE_HASH,
+};
 
 /// The asset standard an order leg moves. No `NATIVE` variant — on Starknet
 /// STRK and ETH are ordinary ERC-20s, named by contract address in the order.
@@ -98,4 +105,74 @@ pub struct OrderDetails {
     pub start_time: u64,
     pub end_time: u64,
     pub order_status: OrderStatus,
+}
+
+// ─── ItemType ↔ SNIP-12 shortstring conversions ──────────────────────────────
+
+pub impl ItemTypeIntoFelt252 of Into<ItemType, felt252> {
+    fn into(self: ItemType) -> felt252 {
+        match self {
+            ItemType::ERC20 => 'ERC20',
+            ItemType::ERC721 => 'ERC721',
+            ItemType::ERC1155 => 'ERC1155',
+        }
+    }
+}
+
+pub impl Felt252TryIntoItemType of TryInto<felt252, ItemType> {
+    fn try_into(self: felt252) -> Option<ItemType> {
+        if self == 'ERC20' {
+            Option::Some(ItemType::ERC20)
+        } else if self == 'ERC721' {
+            Option::Some(ItemType::ERC721)
+        } else if self == 'ERC1155' {
+            Option::Some(ItemType::ERC1155)
+        } else {
+            Option::None
+        }
+    }
+}
+
+// ─── SNIP-12 StructHash implementations ──────────────────────────────────────
+
+pub impl OfferItemHashImpl of StructHash<OfferItem> {
+    fn hash_struct(self: @OfferItem) -> felt252 {
+        let hash_state = PoseidonTrait::new();
+        hash_state.update_with(OFFER_ITEM_TYPE_HASH).update_with(*self).finalize()
+    }
+}
+
+pub impl ConsiderationItemHashImpl of StructHash<ConsiderationItem> {
+    fn hash_struct(self: @ConsiderationItem) -> felt252 {
+        let hash_state = PoseidonTrait::new();
+        hash_state.update_with(CONSIDERATION_ITEM_TYPE_HASH).update_with(*self).finalize()
+    }
+}
+
+pub impl OrderParametersHashImpl of StructHash<OrderParameters> {
+    fn hash_struct(self: @OrderParameters) -> felt252 {
+        let mut hash_state = PoseidonTrait::new();
+        hash_state = hash_state.update_with(ORDER_PARAMETERS_TYPE_HASH);
+        hash_state = hash_state.update_with(*self.offerer);
+        hash_state = hash_state.update_with(self.offer.hash_struct());
+        hash_state = hash_state.update_with(self.consideration.hash_struct());
+        hash_state = hash_state.update_with(*self.start_time);
+        hash_state = hash_state.update_with(*self.end_time);
+        hash_state = hash_state.update_with(*self.salt);
+        hash_state.finalize()
+    }
+}
+
+pub impl OrderFulfillmentHashImpl of StructHash<OrderFulfillment> {
+    fn hash_struct(self: @OrderFulfillment) -> felt252 {
+        let hash_state = PoseidonTrait::new();
+        hash_state.update_with(FULFILLMENT_TYPE_HASH).update_with(*self).finalize()
+    }
+}
+
+pub impl OrderCancellationHashImpl of StructHash<OrderCancellation> {
+    fn hash_struct(self: @OrderCancellation) -> felt252 {
+        let hash_state = PoseidonTrait::new();
+        hash_state.update_with(CANCELLATION_TYPE_HASH).update_with(*self).finalize()
+    }
 }

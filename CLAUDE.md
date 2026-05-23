@@ -283,6 +283,47 @@ Add new profiles here for additional contracts/accounts.
 
 ---
 
+### Medialane-Marketplace (`contracts/Medialane-Marketplace/`) — **rebuild, pre-audit, NOT deployed**
+
+New immutable, zero-fee replacement for `Medialane-Protocol` (ERC-721) and
+`Medialane-Protocol-ERC1155`. Sibling contracts `Medialane721` and `Medialane1155`
+sharing one Cairo package — same settlement math, same SNIP-12 types, same
+review-finding fixes. Zero-argument constructors; no admin, no owner, no fee,
+no hardcoded addresses. Per architecture `00-principles.md §12` the marketplace
+protocol is zero-fee; the platform-layer 1% in io stays unchanged.
+
+- **Status**: feature-complete, 26/26 snforge tests, pending external audit
+- **PR**: https://github.com/medialane-io/medialane-contracts/pull/1
+  (branch `feat/marketplace-rebuild`)
+- **Design spec**: `medialane-core/docs/specs/2026-05-22-immutable-marketplace-rebuild-design.md`
+- **SNIP-12 domains**:
+  - `Medialane721` → `{ name: 'MedialaneMarketplace', version: '1' }`
+  - `Medialane1155` → `{ name: 'MedialaneMarketplace1155', version: '1' }`
+- **Toolchain**: scarb 2.18.0, openzeppelin_* `=2.0.0` (exact-pinned), snforge 0.59.0
+
+**Review-finding fixes folded in (vs. the deployed contracts):**
+- F1 — sequential `use_checked_nonce` dropped (multi-client incompatible);
+  replaced with `consumed_intents: Map<felt252, bool>` + `salt` on the
+  fulfillment struct. Load-bearing on the 1155 contract where orders stay
+  `Created` across partial fills.
+- F2 — self-fill guard parity on both contracts
+- F3 — order shape validated at `register_order` (no garbage orders persist)
+- F4 — for 1155, payment leg's `amount` is the **per-unit price**;
+  `sale_amount = unit_price × quantity` via `checked_mul`
+- F5 — CEI + payment pulled before NFT/units released
+
+**Build + test workflow:**
+```bash
+cd contracts/Medialane-Marketplace
+PATH="/Users/kalamaha/.cargo/bin:/Users/kalamaha/.local/bin:$PATH" snforge test
+```
+
+Audit / declare / deploy steps land here once the audit signs off (snfoundry
+profile, class hashes, deploy addresses, post-deploy SDK + backend env
+repointing — same pattern as the existing `Medialane-Protocol*` entries above).
+
+---
+
 ### MDLN Token (`contracts/MDLN/`) — Ethereum L1 (Solidity)
 
 Governance and utility token for the Medialane DAO. Deployed on Ethereum mainnet; bridged to Starknet via StarkGate.

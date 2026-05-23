@@ -141,3 +141,53 @@ fn cancel_order_marks_the_order_cancelled() {
     let details = dispatcher.get_order_details(order_hash);
     assert!(details.order_status == OrderStatus::Cancelled, "order should be Cancelled");
 }
+
+#[test]
+fn fulfill_order_bid_settles_atomically() {
+    // Bid: buyer offers ERC-20, wants an ERC-721 delivered to themselves.
+    let marketplace = deploy("Medialane721", array![]);
+    let buyer = deploy("MockAccount", array![1]);   // signs the bid (offerer)
+    let seller = deploy("MockAccount", array![2]);  // holds the NFT (fulfiller)
+    let nft = deploy("MockERC721", array![]);
+    let currency = deploy("MockERC20", array![]);
+
+    let nft_dispatcher = IMockERC721Dispatcher { contract_address: nft };
+    nft_dispatcher.mint(seller, 42_u256);
+    let erc20_dispatcher = IMockERC20Dispatcher { contract_address: currency };
+    erc20_dispatcher.mint(buyer, 750_000_u256);
+
+    let params = OrderParameters {
+        offerer: buyer,
+        offer: OfferItem {
+            item_type: 'ERC20',
+            token: currency,
+            token_id: 0,
+            amount: 750_000,
+        },
+        consideration: ConsiderationItem {
+            item_type: 'ERC721',
+            token: nft,
+            token_id: 42,
+            amount: 1,
+            recipient: buyer,
+        },
+        start_time: 0,
+        end_time: 0,
+        salt: 0xb1d,
+    };
+    let dispatcher = IMedialane721Dispatcher { contract_address: marketplace };
+    let order_hash = dispatcher.get_order_hash(params, buyer);
+
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+
+    let fulfillment = OrderFulfillment { order_hash, fulfiller: seller, salt: 0xb1d2 };
+    start_cheat_caller_address(marketplace, seller);
+    dispatcher.fulfill_order(FulfillmentRequest { fulfillment, signature: array![] });
+    stop_cheat_caller_address(marketplace);
+
+    assert!(nft_dispatcher.owner_of(42_u256) == buyer, "NFT delivered to buyer");
+    assert!(erc20_dispatcher.balance_of(seller) == 750_000_u256, "seller received the bid");
+    assert!(erc20_dispatcher.balance_of(buyer) == 0_u256, "buyer paid out");
+    let details = dispatcher.get_order_details(order_hash);
+    assert!(details.order_status == OrderStatus::Filled, "order should be Filled");
+}

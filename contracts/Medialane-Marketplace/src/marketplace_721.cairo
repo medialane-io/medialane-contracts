@@ -164,41 +164,84 @@ pub mod Medialane721 {
             details.order_status = OrderStatus::Filled;
             self.orders.write(order_hash, details);
 
-            // Listing path: offer = ERC-721, consideration = ERC-20. Bid + swap
-            // paths land in follow-up TDD cycles with their own tests.
+            // Resolve the trade direction. We support two shapes:
+            //   - Listing: offer = ERC-721, consideration = ERC-20.
+            //   - Bid:     offer = ERC-20,  consideration = ERC-721.
+            // (ERC-721↔ERC-721 swap lands with its own test.)
             let offer_type: ItemType = details.offer.item_type
                 .try_into()
                 .expect('Bad offer item type');
             let cons_type: ItemType = details.consideration.item_type
                 .try_into()
                 .expect('Bad consideration type');
-            assert!(offer_type == ItemType::ERC721, "Only listings supported");
-            assert!(cons_type == ItemType::ERC20, "Listing must demand ERC-20");
 
-            let token_id: u256 = details.offer.token_id.into();
-            let sale_amount: u256 = details.consideration.amount.into();
+            // The match returns only primitive types so the arms unify cleanly.
+            // Tuple: (nft_token, nft_owner, nft_recipient, token_id,
+            //         payment_token, payment_payer, payment_recipient, sale_amount)
+            let (
+                nft_token,
+                nft_owner,
+                nft_recipient,
+                token_id,
+                payment_token,
+                payment_payer,
+                payment_recipient,
+                sale_amount,
+            ) =
+                if offer_type == ItemType::ERC721 && cons_type == ItemType::ERC20 {
+                    // Listing — offerer sells NFT, fulfiller pays.
+                    let token_id: u256 = details.offer.token_id.into();
+                    let sale_amount: u256 = details.consideration.amount.into();
+                    (
+                        details.offer.token,
+                        details.offerer,
+                        fulfiller,
+                        token_id,
+                        details.consideration.token,
+                        fulfiller,
+                        details.consideration.recipient,
+                        sale_amount,
+                    )
+                } else if offer_type == ItemType::ERC20 && cons_type == ItemType::ERC721 {
+                    // Bid — offerer pays ERC-20, fulfiller delivers NFT to the
+                    // consideration recipient; the seller (fulfiller) receives
+                    // the payment.
+                    let token_id: u256 = details.consideration.token_id.into();
+                    let sale_amount: u256 = details.offer.amount.into();
+                    (
+                        details.consideration.token,
+                        fulfiller,
+                        details.consideration.recipient,
+                        token_id,
+                        details.offer.token,
+                        details.offerer,
+                        fulfiller,
+                        sale_amount,
+                    )
+                } else {
+                    panic!("Unsupported order shape")
+                };
 
             // Royalty is best-effort; collections without ERC-2981 → (0, 0).
             let (royalty_receiver, royalty_amount) = get_royalty(
-                details.offer.token, token_id, sale_amount,
+                nft_token, token_id, sale_amount,
             );
             let seller_amount = seller_proceeds(sale_amount, royalty_amount);
 
             // F5: pull payment BEFORE releasing the NFT.
-            let payment = IERC20Dispatcher { contract_address: details.consideration.token };
+            let payment = IERC20Dispatcher { contract_address: payment_token };
             if royalty_amount > 0 {
-                let ok = payment.transfer_from(fulfiller, royalty_receiver, royalty_amount);
+                let ok = payment.transfer_from(payment_payer, royalty_receiver, royalty_amount);
                 assert!(ok, "Royalty transfer failed");
             }
             if seller_amount > 0 {
-                let ok = payment
-                    .transfer_from(fulfiller, details.consideration.recipient, seller_amount);
+                let ok = payment.transfer_from(payment_payer, payment_recipient, seller_amount);
                 assert!(ok, "Payment transfer failed");
             }
 
             // Then transfer the NFT.
-            IERC721Dispatcher { contract_address: details.offer.token }
-                .transfer_from(details.offerer, fulfiller, token_id);
+            IERC721Dispatcher { contract_address: nft_token }
+                .transfer_from(nft_owner, nft_recipient, token_id);
 
             self
                 .emit(

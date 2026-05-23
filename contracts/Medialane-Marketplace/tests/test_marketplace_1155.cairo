@@ -89,3 +89,107 @@ fn fulfill_order_1155_supports_partial_fills() {
     assert!(final_state.remaining_amount == 0_u256, "fully consumed");
     assert!(final_state.order_status == OrderStatus::Filled, "order is Filled");
 }
+
+// ─── 1155-specific negative coverage ─────────────────────────────────────────
+
+fn standard_listing(
+    offerer: ContractAddress, nft: ContractAddress, currency: ContractAddress, total: felt252,
+) -> OrderParameters {
+    OrderParameters {
+        offerer,
+        offer: OfferItem { item_type: 'ERC1155', token: nft, token_id: 5, amount: total },
+        consideration: ConsiderationItem {
+            item_type: 'ERC20', token: currency, token_id: 0, amount: 100, recipient: offerer,
+        },
+        start_time: 0,
+        end_time: 0,
+        salt: 0x1155,
+    }
+}
+
+#[test]
+#[should_panic(expected: "Insufficient remaining units")]
+fn fulfill_order_1155_rejects_overfill() {
+    // Trying to take 6 units from an order with only 5 available must revert.
+    let marketplace = deploy("Medialane1155", array![]);
+    let offerer = deploy("MockAccount", array![1]);
+    let buyer = deploy("MockAccount", array![2]);
+    let nft = deploy("MockERC1155", array![]);
+    let currency = deploy("MockERC20", array![]);
+
+    IMockERC1155Dispatcher { contract_address: nft }.mint(offerer, 5_u256, 5_u256);
+    IMockERC20Dispatcher { contract_address: currency }.mint(buyer, 1_000_u256);
+
+    let params = standard_listing(offerer, nft, currency, 5);
+    let dispatcher = IMedialane1155Dispatcher { contract_address: marketplace };
+    let order_hash = dispatcher.get_order_hash(params, offerer);
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+
+    let oversized = OrderFulfillment1155 {
+        order_hash, fulfiller: buyer, quantity: 6, salt: 0xff,
+    };
+    start_cheat_caller_address(marketplace, buyer);
+    dispatcher.fulfill_order(FulfillmentRequest1155 {
+        fulfillment: oversized, signature: array![],
+    });
+    stop_cheat_caller_address(marketplace);
+}
+
+#[test]
+#[should_panic(expected: "Fulfillment already consumed")]
+fn fulfill_order_1155_rejects_replay() {
+    // The F1 guard at work: re-submitting the same partial-fill intent against
+    // a still-open order must revert. This is the case the consumed-hash map
+    // was designed for — status stays Created across fills.
+    let marketplace = deploy("Medialane1155", array![]);
+    let offerer = deploy("MockAccount", array![1]);
+    let buyer = deploy("MockAccount", array![2]);
+    let nft = deploy("MockERC1155", array![]);
+    let currency = deploy("MockERC20", array![]);
+
+    IMockERC1155Dispatcher { contract_address: nft }.mint(offerer, 5_u256, 10_u256);
+    IMockERC20Dispatcher { contract_address: currency }.mint(buyer, 1_000_u256);
+
+    let params = standard_listing(offerer, nft, currency, 10);
+    let dispatcher = IMedialane1155Dispatcher { contract_address: marketplace };
+    let order_hash = dispatcher.get_order_hash(params, offerer);
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+
+    let fulfillment = OrderFulfillment1155 {
+        order_hash, fulfiller: buyer, quantity: 3, salt: 0xfeed,
+    };
+    start_cheat_caller_address(marketplace, buyer);
+    dispatcher.fulfill_order(FulfillmentRequest1155 {
+        fulfillment, signature: array![],
+    });
+    // Order still has 7 remaining — status is Created. Same intent must not replay.
+    dispatcher.fulfill_order(FulfillmentRequest1155 {
+        fulfillment, signature: array![],
+    });
+    stop_cheat_caller_address(marketplace);
+}
+
+#[test]
+#[should_panic(expected: "Cannot fill own order")]
+fn fulfill_order_1155_rejects_self_fill() {
+    let marketplace = deploy("Medialane1155", array![]);
+    let alice = deploy("MockAccount", array![1]);
+    let nft = deploy("MockERC1155", array![]);
+    let currency = deploy("MockERC20", array![]);
+
+    IMockERC1155Dispatcher { contract_address: nft }.mint(alice, 5_u256, 10_u256);
+
+    let params = standard_listing(alice, nft, currency, 10);
+    let dispatcher = IMedialane1155Dispatcher { contract_address: marketplace };
+    let order_hash = dispatcher.get_order_hash(params, alice);
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+
+    let fulfillment = OrderFulfillment1155 {
+        order_hash, fulfiller: alice, quantity: 1, salt: 0x5e1f,
+    };
+    start_cheat_caller_address(marketplace, alice);
+    dispatcher.fulfill_order(FulfillmentRequest1155 {
+        fulfillment, signature: array![],
+    });
+    stop_cheat_caller_address(marketplace);
+}

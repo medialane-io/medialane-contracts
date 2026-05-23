@@ -335,6 +335,30 @@ fn fulfill_order_rejects_cancelled_order() {
 }
 
 #[test]
+#[should_panic(expected: "Invalid signature")]
+fn register_order_rejects_invalid_signature() {
+    // The offerer's account returns a non-VALIDATED magic — the marketplace
+    // must refuse to register the order.
+    let marketplace = deploy("Medialane721", array![]);
+    let offerer = deploy("MockBadAccount", array![1]);
+
+    let nft_token: ContractAddress = 0xabc.try_into().unwrap();
+    let currency: ContractAddress = 0xdef.try_into().unwrap();
+    let params = OrderParameters {
+        offerer,
+        offer: OfferItem { item_type: 'ERC721', token: nft_token, token_id: 1, amount: 1 },
+        consideration: ConsiderationItem {
+            item_type: 'ERC20', token: currency, token_id: 0, amount: 1, recipient: offerer,
+        },
+        start_time: 0,
+        end_time: 0,
+        salt: 0xbad,
+    };
+    let dispatcher = IMedialane721Dispatcher { contract_address: marketplace };
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+}
+
+#[test]
 #[should_panic(expected: "Order has expired")]
 fn fulfill_order_rejects_expired_order() {
     let marketplace = deploy("Medialane721", array![]);

@@ -90,6 +90,29 @@ pub mod MockAccount {
     }
 }
 
+/// An SRC-6 account that REJECTS every signature — returns `0` from
+/// `is_valid_signature`, which is neither `starknet::VALIDATED` nor `1`. Used
+/// to drive the marketplace's invalid-signature path.
+#[starknet::contract]
+pub mod MockBadAccount {
+    #[storage]
+    struct Storage {}
+
+    #[constructor]
+    fn constructor(ref self: ContractState, _id: felt252) {}
+
+    #[abi(per_item)]
+    #[generate_trait]
+    pub impl ExternalImpl of ExternalTrait {
+        #[external(v0)]
+        fn is_valid_signature(
+            self: @ContractState, hash: felt252, signature: Array<felt252>,
+        ) -> felt252 {
+            0
+        }
+    }
+}
+
 /// A collection that does not declare ERC-2981 — `supports_interface` is false
 /// for every id.
 #[starknet::contract]

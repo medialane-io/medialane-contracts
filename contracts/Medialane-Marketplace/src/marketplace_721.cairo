@@ -97,6 +97,20 @@ pub mod Medialane721 {
             let signature = order.signature;
             let offerer = params.offerer;
 
+            // F3 — validate the order shape at registration. Persist only orders
+            // the contract knows how to settle: listing (ERC-721↔ERC-20),
+            // bid (ERC-20↔ERC-721), or ERC-721↔ERC-721 swap.
+            let offer_type: Option<ItemType> = params.offer.item_type.try_into();
+            let cons_type: Option<ItemType> = params.consideration.item_type.try_into();
+            assert(offer_type.is_some(), 'Invalid offer item type');
+            assert(cons_type.is_some(), 'Invalid consideration type');
+            let ot = offer_type.unwrap();
+            let ct = cons_type.unwrap();
+            let supported = (ot == ItemType::ERC721 && ct == ItemType::ERC20)
+                || (ot == ItemType::ERC20 && ct == ItemType::ERC721)
+                || (ot == ItemType::ERC721 && ct == ItemType::ERC721);
+            assert(supported, 'Unsupported order shape');
+
             let order_hash = params.get_message_hash(offerer);
 
             // Replay guard — an order hash can be registered exactly once.
@@ -164,16 +178,45 @@ pub mod Medialane721 {
             details.order_status = OrderStatus::Filled;
             self.orders.write(order_hash, details);
 
-            // Resolve the trade direction. We support two shapes:
+            // Resolve the trade direction. Three supported shapes:
             //   - Listing: offer = ERC-721, consideration = ERC-20.
             //   - Bid:     offer = ERC-20,  consideration = ERC-721.
-            // (ERC-721↔ERC-721 swap lands with its own test.)
+            //   - Swap:    offer = ERC-721, consideration = ERC-721 (no payment).
             let offer_type: ItemType = details.offer.item_type
                 .try_into()
                 .expect('Bad offer item type');
             let cons_type: ItemType = details.consideration.item_type
                 .try_into()
                 .expect('Bad consideration type');
+
+            // Swap path — two NFTs, no payment, no royalty. Settle and return.
+            if offer_type == ItemType::ERC721 && cons_type == ItemType::ERC721 {
+                let offer_token_id: u256 = details.offer.token_id.into();
+                let cons_token_id: u256 = details.consideration.token_id.into();
+
+                IERC721Dispatcher { contract_address: details.offer.token }
+                    .transfer_from(details.offerer, fulfiller, offer_token_id);
+                IERC721Dispatcher { contract_address: details.consideration.token }
+                    .transfer_from(
+                        fulfiller, details.consideration.recipient, cons_token_id,
+                    );
+
+                let zero: ContractAddress = 0.try_into().unwrap();
+                self
+                    .emit(
+                        Event::OrderFulfilled(
+                            OrderFulfilled {
+                                order_hash,
+                                offerer: details.offerer,
+                                fulfiller,
+                                sale_amount: 0,
+                                royalty_receiver: zero,
+                                royalty_amount: 0,
+                            },
+                        ),
+                    );
+                return;
+            }
 
             // The match returns only primitive types so the arms unify cleanly.
             // Tuple: (nft_token, nft_owner, nft_recipient, token_id,

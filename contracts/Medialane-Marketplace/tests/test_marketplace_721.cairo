@@ -160,6 +160,77 @@ fn fulfill_order_pays_erc2981_royalty() {
 }
 
 #[test]
+#[should_panic(expected: ('Unsupported order shape', 'ENTRYPOINT_FAILED'))]
+fn register_order_rejects_unsupported_shape() {
+    // ERC-20 ↔ ERC-20 has no NFT leg and isn't supported — must be rejected
+    // at registration so we never persist an order the contract cannot settle.
+    let marketplace = deploy("Medialane721", array![]);
+    let offerer = deploy("MockAccount", array![1]);
+    let token_a: ContractAddress = 0xa.try_into().unwrap();
+    let token_b: ContractAddress = 0xb.try_into().unwrap();
+
+    let params = OrderParameters {
+        offerer,
+        offer: OfferItem { item_type: 'ERC20', token: token_a, token_id: 0, amount: 100 },
+        consideration: ConsiderationItem {
+            item_type: 'ERC20',
+            token: token_b,
+            token_id: 0,
+            amount: 200,
+            recipient: offerer,
+        },
+        start_time: 0,
+        end_time: 0,
+        salt: 0x1,
+    };
+    let dispatcher = IMedialane721Dispatcher { contract_address: marketplace };
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+}
+
+#[test]
+fn fulfill_order_erc721_swap_settles_both_nfts() {
+    // The architecture explicitly supports ERC-721 ↔ ERC-721 swaps (no payment).
+    let marketplace = deploy("Medialane721", array![]);
+    let alice = deploy("MockAccount", array![1]);
+    let bob = deploy("MockAccount", array![2]);
+    let nft_a = deploy("MockERC721", array![]);
+    let nft_b = deploy("MockERC721", array![]);
+
+    let a_dispatcher = IMockERC721Dispatcher { contract_address: nft_a };
+    let b_dispatcher = IMockERC721Dispatcher { contract_address: nft_b };
+    a_dispatcher.mint(alice, 1_u256);  // Alice owns A#1
+    b_dispatcher.mint(bob, 2_u256);    // Bob owns B#2
+
+    let params = OrderParameters {
+        offerer: alice,
+        offer: OfferItem { item_type: 'ERC721', token: nft_a, token_id: 1, amount: 1 },
+        consideration: ConsiderationItem {
+            item_type: 'ERC721',
+            token: nft_b,
+            token_id: 2,
+            amount: 1,
+            recipient: alice,    // Alice asks to receive B#2.
+        },
+        start_time: 0,
+        end_time: 0,
+        salt: 0xabc1,
+    };
+    let dispatcher = IMedialane721Dispatcher { contract_address: marketplace };
+    let order_hash = dispatcher.get_order_hash(params, alice);
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+
+    let fulfillment = OrderFulfillment { order_hash, fulfiller: bob, salt: 0xabc2 };
+    start_cheat_caller_address(marketplace, bob);
+    dispatcher.fulfill_order(FulfillmentRequest { fulfillment, signature: array![] });
+    stop_cheat_caller_address(marketplace);
+
+    assert!(a_dispatcher.owner_of(1_u256) == bob, "nft_a should now belong to bob");
+    assert!(b_dispatcher.owner_of(2_u256) == alice, "nft_b should now belong to alice");
+    let details = dispatcher.get_order_details(order_hash);
+    assert!(details.order_status == OrderStatus::Filled, "swap should be Filled");
+}
+
+#[test]
 fn cancel_order_marks_the_order_cancelled() {
     let marketplace = deploy("Medialane721", array![]);
     let offerer = deploy("MockAccount", array![1]);

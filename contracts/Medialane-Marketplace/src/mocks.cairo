@@ -26,6 +26,20 @@ pub trait IMockERC721<TContractState> {
     );
 }
 
+#[starknet::interface]
+pub trait IMockERC1155<TContractState> {
+    fn mint(ref self: TContractState, to: ContractAddress, id: u256, amount: u256);
+    fn balance_of(self: @TContractState, account: ContractAddress, id: u256) -> u256;
+    fn safe_transfer_from(
+        ref self: TContractState,
+        from: ContractAddress,
+        to: ContractAddress,
+        id: u256,
+        amount: u256,
+        data: Span<felt252>,
+    );
+}
+
 /// A collection that declares ERC-2981 and reports a flat 5% royalty.
 #[starknet::contract]
 pub mod MockRoyaltyCollection {
@@ -177,6 +191,45 @@ pub mod MockRoyaltyNFT {
         ) -> (ContractAddress, u256) {
             let receiver: ContractAddress = 0xcafe.try_into().unwrap();
             (receiver, sale_price * 5 / 100)
+        }
+    }
+}
+
+/// Minimal ERC-1155 mock — moves balances without checking approvals.
+#[starknet::contract]
+pub mod MockERC1155 {
+    use starknet::storage::{Map, StorageMapReadAccess, StorageMapWriteAccess};
+    use starknet::ContractAddress;
+
+    #[storage]
+    struct Storage {
+        balances: Map<(ContractAddress, u256), u256>,
+    }
+
+    #[abi(embed_v0)]
+    impl Impl of super::IMockERC1155<ContractState> {
+        fn mint(ref self: ContractState, to: ContractAddress, id: u256, amount: u256) {
+            let prev = self.balances.read((to, id));
+            self.balances.write((to, id), prev + amount);
+        }
+
+        fn balance_of(self: @ContractState, account: ContractAddress, id: u256) -> u256 {
+            self.balances.read((account, id))
+        }
+
+        fn safe_transfer_from(
+            ref self: ContractState,
+            from: ContractAddress,
+            to: ContractAddress,
+            id: u256,
+            amount: u256,
+            data: Span<felt252>,
+        ) {
+            let from_bal = self.balances.read((from, id));
+            assert!(from_bal >= amount, "MockERC1155: insufficient balance");
+            self.balances.write((from, id), from_bal - amount);
+            let to_bal = self.balances.read((to, id));
+            self.balances.write((to, id), to_bal + amount);
         }
     }
 }

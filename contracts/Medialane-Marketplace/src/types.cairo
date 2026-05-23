@@ -14,8 +14,8 @@ use core::poseidon::PoseidonTrait;
 use openzeppelin_utils::snip12::StructHash;
 use starknet::ContractAddress;
 use crate::utils::{
-    CANCELLATION_TYPE_HASH, CONSIDERATION_ITEM_TYPE_HASH, FULFILLMENT_TYPE_HASH,
-    OFFER_ITEM_TYPE_HASH, ORDER_PARAMETERS_TYPE_HASH,
+    CANCELLATION_TYPE_HASH, CONSIDERATION_ITEM_TYPE_HASH, FULFILLMENT_1155_TYPE_HASH,
+    FULFILLMENT_TYPE_HASH, OFFER_ITEM_TYPE_HASH, ORDER_PARAMETERS_TYPE_HASH,
 };
 
 /// The asset standard an order leg moves. No `NATIVE` variant — on Starknet
@@ -117,6 +117,22 @@ pub struct CancelRequest {
     pub signature: Array<felt252>,
 }
 
+/// ERC-1155 fulfillment intent — carries `quantity` so each partial fill is a
+/// distinct signed intent and consumed-hash replay (F1) actually does work.
+#[derive(Drop, Copy, Serde, Hash)]
+pub struct OrderFulfillment1155 {
+    pub order_hash: felt252,
+    pub fulfiller: ContractAddress,
+    pub quantity: felt252,
+    pub salt: felt252,
+}
+
+#[derive(Drop, Serde)]
+pub struct FulfillmentRequest1155 {
+    pub fulfillment: OrderFulfillment1155,
+    pub signature: Array<felt252>,
+}
+
 /// The on-chain record written when an order is registered.
 #[derive(Drop, Copy, Serde, starknet::Store)]
 pub struct OrderDetails {
@@ -126,6 +142,21 @@ pub struct OrderDetails {
     pub start_time: u64,
     pub end_time: u64,
     pub order_status: OrderStatus,
+}
+
+/// On-chain record for an ERC-1155 marketplace order. Carries `total_amount`
+/// and `remaining_amount` so the same `Created` order can be partially filled
+/// across many fulfillments until it's fully consumed → `Filled`.
+#[derive(Drop, Copy, Serde, starknet::Store)]
+pub struct OrderDetails1155 {
+    pub offerer: ContractAddress,
+    pub offer: OfferItem,
+    pub consideration: ConsiderationItem,
+    pub start_time: u64,
+    pub end_time: u64,
+    pub order_status: OrderStatus,
+    pub total_amount: u256,
+    pub remaining_amount: u256,
 }
 
 // ─── ItemType ↔ SNIP-12 shortstring conversions ──────────────────────────────
@@ -195,5 +226,12 @@ pub impl OrderCancellationHashImpl of StructHash<OrderCancellation> {
     fn hash_struct(self: @OrderCancellation) -> felt252 {
         let hash_state = PoseidonTrait::new();
         hash_state.update_with(CANCELLATION_TYPE_HASH).update_with(*self).finalize()
+    }
+}
+
+pub impl OrderFulfillment1155HashImpl of StructHash<OrderFulfillment1155> {
+    fn hash_struct(self: @OrderFulfillment1155) -> felt252 {
+        let hash_state = PoseidonTrait::new();
+        hash_state.update_with(FULFILLMENT_1155_TYPE_HASH).update_with(*self).finalize()
     }
 }

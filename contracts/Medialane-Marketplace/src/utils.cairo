@@ -23,6 +23,10 @@ pub const FULFILLMENT_TYPE_HASH: felt252 = selector!(
     "\"OrderFulfillment\"(\"order_hash\":\"felt\",\"fulfiller\":\"ContractAddress\",\"salt\":\"felt\")",
 );
 
+pub const FULFILLMENT_1155_TYPE_HASH: felt252 = selector!(
+    "\"OrderFulfillment1155\"(\"order_hash\":\"felt\",\"fulfiller\":\"ContractAddress\",\"quantity\":\"felt\",\"salt\":\"felt\")",
+);
+
 pub const CANCELLATION_TYPE_HASH: felt252 = selector!(
     "\"OrderCancellation\"(\"order_hash\":\"felt\",\"offerer\":\"ContractAddress\",\"salt\":\"felt\")",
 );

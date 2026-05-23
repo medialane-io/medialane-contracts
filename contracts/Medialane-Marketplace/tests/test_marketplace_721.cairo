@@ -1,5 +1,6 @@
 use snforge_std::{
     ContractClassTrait, DeclareResultTrait, declare,
+    start_cheat_block_timestamp, stop_cheat_block_timestamp,
     start_cheat_caller_address, stop_cheat_caller_address,
 };
 use starknet::ContractAddress;
@@ -261,6 +262,112 @@ fn cancel_order_marks_the_order_cancelled() {
 
     let details = dispatcher.get_order_details(order_hash);
     assert!(details.order_status == OrderStatus::Cancelled, "order should be Cancelled");
+}
+
+// ─── Regression-guard tests for the security invariants ──────────────────────
+// These exercise the existing asserts so any future change that weakens a
+// guard fails loudly. Each one is the minimum reproduction of a known attack.
+
+#[test]
+#[should_panic(expected: "Cannot fill own order")]
+fn fulfill_order_rejects_self_fill() {
+    // F2 — an offerer must not be allowed to fill their own listing (wash trading).
+    let marketplace = deploy("Medialane721", array![]);
+    let alice = deploy("MockAccount", array![1]);
+    let nft = deploy("MockERC721", array![]);
+    let currency = deploy("MockERC20", array![]);
+
+    IMockERC721Dispatcher { contract_address: nft }.mint(alice, 1_u256);
+
+    let params = OrderParameters {
+        offerer: alice,
+        offer: OfferItem { item_type: 'ERC721', token: nft, token_id: 1, amount: 1 },
+        consideration: ConsiderationItem {
+            item_type: 'ERC20', token: currency, token_id: 0, amount: 1, recipient: alice,
+        },
+        start_time: 0, end_time: 0, salt: 0x1,
+    };
+    let dispatcher = IMedialane721Dispatcher { contract_address: marketplace };
+    let order_hash = dispatcher.get_order_hash(params, alice);
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+
+    // Alice tries to fulfill her own order — caller == offerer == fulfiller.
+    let fulfillment = OrderFulfillment { order_hash, fulfiller: alice, salt: 0x2 };
+    start_cheat_caller_address(marketplace, alice);
+    dispatcher.fulfill_order(FulfillmentRequest { fulfillment, signature: array![] });
+    stop_cheat_caller_address(marketplace);
+}
+
+#[test]
+#[should_panic(expected: "Order is not active")]
+fn fulfill_order_rejects_cancelled_order() {
+    // A cancelled order must not be fulfillable.
+    let marketplace = deploy("Medialane721", array![]);
+    let offerer = deploy("MockAccount", array![1]);
+    let fulfiller = deploy("MockAccount", array![2]);
+    let nft = deploy("MockERC721", array![]);
+    let currency = deploy("MockERC20", array![]);
+
+    IMockERC721Dispatcher { contract_address: nft }.mint(offerer, 1_u256);
+    IMockERC20Dispatcher { contract_address: currency }.mint(fulfiller, 1_u256);
+
+    let params = OrderParameters {
+        offerer,
+        offer: OfferItem { item_type: 'ERC721', token: nft, token_id: 1, amount: 1 },
+        consideration: ConsiderationItem {
+            item_type: 'ERC20', token: currency, token_id: 0, amount: 1, recipient: offerer,
+        },
+        start_time: 0, end_time: 0, salt: 0xff,
+    };
+    let dispatcher = IMedialane721Dispatcher { contract_address: marketplace };
+    let order_hash = dispatcher.get_order_hash(params, offerer);
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+
+    // Cancel first…
+    let cancellation = OrderCancellation { order_hash, offerer, salt: 0xc };
+    dispatcher.cancel_order(CancelRequest { cancellation, signature: array![] });
+
+    // …then try to fulfill the cancelled order.
+    let fulfillment = OrderFulfillment { order_hash, fulfiller, salt: 0xfa };
+    start_cheat_caller_address(marketplace, fulfiller);
+    dispatcher.fulfill_order(FulfillmentRequest { fulfillment, signature: array![] });
+    stop_cheat_caller_address(marketplace);
+}
+
+#[test]
+#[should_panic(expected: "Order has expired")]
+fn fulfill_order_rejects_expired_order() {
+    let marketplace = deploy("Medialane721", array![]);
+    let offerer = deploy("MockAccount", array![1]);
+    let fulfiller = deploy("MockAccount", array![2]);
+    let nft = deploy("MockERC721", array![]);
+    let currency = deploy("MockERC20", array![]);
+
+    IMockERC721Dispatcher { contract_address: nft }.mint(offerer, 1_u256);
+    IMockERC20Dispatcher { contract_address: currency }.mint(fulfiller, 1_u256);
+
+    // Register at t=100 with end_time=200.
+    start_cheat_block_timestamp(marketplace, 100);
+    let params = OrderParameters {
+        offerer,
+        offer: OfferItem { item_type: 'ERC721', token: nft, token_id: 1, amount: 1 },
+        consideration: ConsiderationItem {
+            item_type: 'ERC20', token: currency, token_id: 0, amount: 1, recipient: offerer,
+        },
+        start_time: 100, end_time: 200, salt: 0xee,
+    };
+    let dispatcher = IMedialane721Dispatcher { contract_address: marketplace };
+    let order_hash = dispatcher.get_order_hash(params, offerer);
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+    stop_cheat_block_timestamp(marketplace);
+
+    // Move past the expiry and try to fulfill.
+    start_cheat_block_timestamp(marketplace, 500);
+    let fulfillment = OrderFulfillment { order_hash, fulfiller, salt: 0xef };
+    start_cheat_caller_address(marketplace, fulfiller);
+    dispatcher.fulfill_order(FulfillmentRequest { fulfillment, signature: array![] });
+    stop_cheat_caller_address(marketplace);
+    stop_cheat_block_timestamp(marketplace);
 }
 
 #[test]

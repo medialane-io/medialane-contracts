@@ -216,7 +216,36 @@ pub mod Medialane721 {
         }
 
         fn cancel_order(ref self: ContractState, cancel_request: CancelRequest) {
-            panic!("cancel_order not implemented");
+            let cancellation = cancel_request.cancellation;
+            let signature = cancel_request.signature;
+            let order_hash = cancellation.order_hash;
+            let offerer = cancellation.offerer;
+
+            // Order must be live.
+            let mut details = self.orders.read(order_hash);
+            assert!(details.order_status == OrderStatus::Created, "Order is not active");
+
+            // Only the order's original offerer can cancel it. Anyone may submit
+            // the transaction — the signature is the authority.
+            assert!(offerer == details.offerer, "Not the order's offerer");
+
+            // Verify the offerer's SNIP-12 signature on the cancellation intent.
+            let cancellation_hash = cancellation.get_message_hash(offerer);
+            let valid = ISRC6Dispatcher { contract_address: offerer }
+                .is_valid_signature(cancellation_hash, signature);
+            assert!(valid == starknet::VALIDATED || valid == 1, "Invalid cancellation signature");
+
+            // F1: unordered replay guard.
+            assert!(
+                !self.consumed_intents.read(cancellation_hash),
+                "Cancellation already consumed",
+            );
+            self.consumed_intents.write(cancellation_hash, true);
+
+            details.order_status = OrderStatus::Cancelled;
+            self.orders.write(order_hash, details);
+
+            self.emit(Event::OrderCancelled(OrderCancelled { order_hash, offerer }));
         }
 
         fn get_order_details(self: @ContractState, order_hash: felt252) -> OrderDetails {

@@ -11,8 +11,8 @@ use medialane_marketplace::mocks::{
     IMockERC721Dispatcher, IMockERC721DispatcherTrait,
 };
 use medialane_marketplace::types::{
-    ConsiderationItem, FulfillmentRequest, OfferItem, Order, OrderFulfillment,
-    OrderParameters, OrderStatus,
+    CancelRequest, ConsiderationItem, FulfillmentRequest, OfferItem, Order,
+    OrderCancellation, OrderFulfillment, OrderParameters, OrderStatus,
 };
 
 fn deploy(name: ByteArray, calldata: Array<felt252>) -> ContractAddress {
@@ -107,4 +107,37 @@ fn fulfill_order_listing_settles_atomically() {
     assert!(erc20_dispatcher.balance_of(fulfiller) == 0_u256, "fulfiller paid out");
     let details = dispatcher.get_order_details(order_hash);
     assert!(details.order_status == OrderStatus::Filled, "order should be Filled");
+}
+
+#[test]
+fn cancel_order_marks_the_order_cancelled() {
+    let marketplace = deploy("Medialane721", array![]);
+    let offerer = deploy("MockAccount", array![1]);
+
+    let nft_token: ContractAddress = 0xabcdef.try_into().unwrap();
+    let currency: ContractAddress = 0x123456.try_into().unwrap();
+
+    let params = OrderParameters {
+        offerer,
+        offer: OfferItem { item_type: 'ERC721', token: nft_token, token_id: 11, amount: 1 },
+        consideration: ConsiderationItem {
+            item_type: 'ERC20',
+            token: currency,
+            token_id: 0,
+            amount: 500_000,
+            recipient: offerer,
+        },
+        start_time: 0,
+        end_time: 0,
+        salt: 0xdeadbeef,
+    };
+    let dispatcher = IMedialane721Dispatcher { contract_address: marketplace };
+    let order_hash = dispatcher.get_order_hash(params, offerer);
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+
+    let cancellation = OrderCancellation { order_hash, offerer, salt: 0xc0c0 };
+    dispatcher.cancel_order(CancelRequest { cancellation, signature: array![] });
+
+    let details = dispatcher.get_order_details(order_hash);
+    assert!(details.order_status == OrderStatus::Cancelled, "order should be Cancelled");
 }

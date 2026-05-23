@@ -131,6 +131,56 @@ pub mod MockERC20 {
     }
 }
 
+/// An ERC-721 mock that also declares ERC-2981 with a flat 5% royalty to a
+/// fixed receiver — for exercising the marketplace's royalty path end-to-end.
+#[starknet::contract]
+pub mod MockRoyaltyNFT {
+    use starknet::storage::{Map, StorageMapReadAccess, StorageMapWriteAccess};
+    use starknet::ContractAddress;
+    use crate::constants::IERC2981_ID;
+
+    #[storage]
+    struct Storage {
+        owners: Map<u256, ContractAddress>,
+    }
+
+    #[abi(embed_v0)]
+    impl Erc721 of super::IMockERC721<ContractState> {
+        fn mint(ref self: ContractState, to: ContractAddress, token_id: u256) {
+            self.owners.write(token_id, to);
+        }
+        fn owner_of(self: @ContractState, token_id: u256) -> ContractAddress {
+            self.owners.read(token_id)
+        }
+        fn transfer_from(
+            ref self: ContractState,
+            from: ContractAddress,
+            to: ContractAddress,
+            token_id: u256,
+        ) {
+            let current = self.owners.read(token_id);
+            assert!(current == from, "MockRoyaltyNFT: not the owner");
+            self.owners.write(token_id, to);
+        }
+    }
+
+    #[abi(per_item)]
+    #[generate_trait]
+    pub impl Royalty of RoyaltyTrait {
+        #[external(v0)]
+        fn supports_interface(self: @ContractState, interface_id: felt252) -> bool {
+            interface_id == IERC2981_ID
+        }
+        #[external(v0)]
+        fn royalty_info(
+            self: @ContractState, token_id: u256, sale_price: u256,
+        ) -> (ContractAddress, u256) {
+            let receiver: ContractAddress = 0xcafe.try_into().unwrap();
+            (receiver, sale_price * 5 / 100)
+        }
+    }
+}
+
 /// Minimal ERC-721 mock — moves ownership without checking approvals.
 #[starknet::contract]
 pub mod MockERC721 {

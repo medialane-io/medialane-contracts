@@ -110,6 +110,56 @@ fn fulfill_order_listing_settles_atomically() {
 }
 
 #[test]
+fn fulfill_order_pays_erc2981_royalty() {
+    // The NFT is a collection that declares a flat 5% ERC-2981 royalty; the
+    // royalty receiver must be paid before the seller gets the rest.
+    let marketplace = deploy("Medialane721", array![]);
+    let offerer = deploy("MockAccount", array![1]);
+    let fulfiller = deploy("MockAccount", array![2]);
+    let nft = deploy("MockRoyaltyNFT", array![]);
+    let currency = deploy("MockERC20", array![]);
+
+    // IMockERC721Dispatcher works against MockRoyaltyNFT — same entrypoint selectors.
+    let nft_dispatcher = IMockERC721Dispatcher { contract_address: nft };
+    nft_dispatcher.mint(offerer, 99_u256);
+    let erc20_dispatcher = IMockERC20Dispatcher { contract_address: currency };
+    erc20_dispatcher.mint(fulfiller, 1_000_000_u256);
+
+    let params = OrderParameters {
+        offerer,
+        offer: OfferItem { item_type: 'ERC721', token: nft, token_id: 99, amount: 1 },
+        consideration: ConsiderationItem {
+            item_type: 'ERC20',
+            token: currency,
+            token_id: 0,
+            amount: 1_000_000,
+            recipient: offerer,
+        },
+        start_time: 0,
+        end_time: 0,
+        salt: 0xa11ce,
+    };
+    let dispatcher = IMedialane721Dispatcher { contract_address: marketplace };
+    let order_hash = dispatcher.get_order_hash(params, offerer);
+    dispatcher.register_order(Order { parameters: params, signature: array![] });
+
+    let fulfillment = OrderFulfillment { order_hash, fulfiller, salt: 0xb0b };
+    start_cheat_caller_address(marketplace, fulfiller);
+    dispatcher.fulfill_order(FulfillmentRequest { fulfillment, signature: array![] });
+    stop_cheat_caller_address(marketplace);
+
+    // 5% royalty of 1_000_000 = 50_000. Seller gets the remaining 950_000.
+    let royalty_receiver: ContractAddress = 0xcafe.try_into().unwrap();
+    assert!(nft_dispatcher.owner_of(99_u256) == fulfiller, "NFT delivered to fulfiller");
+    assert!(
+        erc20_dispatcher.balance_of(royalty_receiver) == 50_000_u256,
+        "5% royalty paid to the creator",
+    );
+    assert!(erc20_dispatcher.balance_of(offerer) == 950_000_u256, "seller paid net of royalty");
+    assert!(erc20_dispatcher.balance_of(fulfiller) == 0_u256, "fulfiller paid out in full");
+}
+
+#[test]
 fn cancel_order_marks_the_order_cancelled() {
     let marketplace = deploy("Medialane721", array![]);
     let offerer = deploy("MockAccount", array![1]);

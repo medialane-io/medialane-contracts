@@ -1,1348 +1,495 @@
 #[cfg(test)]
 mod test {
-    use medialane_protocol::core::events::*;
     use medialane_protocol::core::interface::{IMedialaneDispatcher, IMedialaneDispatcherTrait};
-    use medialane_protocol::core::medialane::Medialane;
     use medialane_protocol::core::types::*;
-    use medialane_protocol::core::utils::*;
-    use medialane_protocol::mocks::erc1155::{IMockERC1155Dispatcher, IMockERC1155DispatcherTrait};
     use medialane_protocol::mocks::erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
     use medialane_protocol::mocks::erc721::{IMockERC721Dispatcher, IMockERC721DispatcherTrait};
-    use openzeppelin_account::interface::AccountABIDispatcher;
-    use openzeppelin_token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
-    use openzeppelin_token::erc721::interface::{IERC721Dispatcher, IERC721DispatcherTrait};
-    use snforge_std::{
-        CheatSpan, ContractClassTrait, DeclareResultTrait, EventSpyAssertionsTrait,
-        cheat_caller_address, declare, spy_events, start_cheat_block_timestamp,
-        stop_cheat_block_timestamp,
+    use medialane_protocol::mocks::erc721_royalty::{
+        IMockERC721RoyaltyDispatcher, IMockERC721RoyaltyDispatcherTrait,
     };
-    use starknet::{ContractAddress, get_block_timestamp};
+    use snforge_std::signature::KeyPairTrait;
+    use snforge_std::signature::stark_curve::{StarkCurveKeyPairImpl, StarkCurveSignerImpl};
+    use snforge_std::{
+        CheatSpan, ContractClassTrait, DeclareResultTrait, cheat_caller_address, declare,
+        start_cheat_block_timestamp_global,
+    };
+    use starknet::ContractAddress;
 
-    // Pre-computed SNIP-12 signatures for the test accounts and order parameters below.
-    // Generated with StarknetJS against contract address 0x2a0626..., SNIP-12 v1, chain_id SN_MAIN.
-    // Regenerate if OrderParameters type string, SNIP-12 version, or test addresses change.
-    fn erc20_erc721_signature() -> Array<felt252> {
-        array![
-            3454928433868771987793737319591141299303880296339125482430761070816410607020,
-            1687957968351732802669593318187197490044820175724885527288686545380842475828,
-        ]
-    }
+    const OWNER: felt252 = 0x1001;
+    const OFFERER_SK: felt252 = 0x111111;
+    const FULFILLER_SK: felt252 = 0x222222;
+    const TOKEN_ID: felt252 = 7;
+    const PRICE: felt252 = 1000000;
 
-    fn erc20_erc721_fulfilment_signature() -> Array<felt252> {
-        array![
-            3153762219456228275540139167487013577360679603422098242184045521620900787267,
-            1775594892691740465900712693775684609458245052498958467425546734232892735538,
-        ]
-    }
-
-    fn erc20_erc721_cancel_signature() -> Array<felt252> {
-        array![
-            3428666881081820239052350035163331228699955344013335388546792595001053179231,
-            641750449764461143285733112189243315208147935584282455090309799624730568160,
-        ]
-    }
-
-    fn invalid_signature() -> Array<felt252> {
-        array![
-            3153762219456228275540139167487013577360679603422098242184045521620900787267,
-            641750449764461143285733112189243315208147935584282455090309799624730568160,
-        ]
-    }
-
-    const OWNER_ADDRESS: felt252 = 0x1001;
-    const NFT_TOKEN_ID: felt252 = 0;
-    const ERC20_AMOUNT: felt252 = 1000000;
-
-    #[derive(Clone, Drop)]
-    struct DeployedContracts {
+    #[derive(Drop)]
+    struct Env {
         medialane: IMedialaneDispatcher,
         erc20: IMockERC20Dispatcher,
         erc721: IMockERC721Dispatcher,
-        erc1155: IMockERC1155Dispatcher,
-    }
-
-    #[derive(Clone, Drop, Debug)]
-    struct Accounts {
-        owner: ContractAddress,
         offerer: ContractAddress,
+        offerer_sk: felt252,
         fulfiller: ContractAddress,
-        recipient: ContractAddress,
+        fulfiller_sk: felt252,
     }
 
-    fn setup_accounts() -> Accounts {
-        let offerer_pub_key: ContractAddress =
-            0x05c9bc4f9800eef3186980708ecedee4f056a4542abd7a24713b07680eda4346
-            .try_into()
-            .unwrap();
+    fn declare_and_deploy(name: ByteArray, calldata: Array<felt252>) -> ContractAddress {
+        let contract = declare(name).unwrap().contract_class();
+        let (addr, _) = contract.deploy(@calldata).unwrap();
+        addr
+    }
 
-        let offerer_address: ContractAddress =
-            0x040204472aef47d0aa8d68316e773f09a6f7d8d10ff6d30363b353ef3f2d1305
-            .try_into()
-            .unwrap();
-        let offerer = deploy_account(offerer_pub_key, offerer_address);
+    fn deploy_account(secret_key: felt252) -> ContractAddress {
+        let kp = KeyPairTrait::<felt252, felt252>::from_secret_key(secret_key);
+        declare_and_deploy("MockAccount", array![kp.public_key])
+    }
 
-        let fulfiller_pub_key: ContractAddress =
-            0x0349afcb9441c4a8ab36d0d04e671479f78c5df5812ec8e5ddec4742d2bb2bec
-            .try_into()
-            .unwrap();
-        let fulfiller_address: ContractAddress =
-            0x01d0c57c28e34bf6407c2fbfadbda7ae59d39ff9c8f9ac4ec3fa32ec784fb549
-            .try_into()
-            .unwrap();
-        let fulfiller = deploy_account(fulfiller_pub_key, fulfiller_address);
+    fn setup() -> Env {
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let offerer = deploy_account(OFFERER_SK);
+        let fulfiller = deploy_account(FULFILLER_SK);
 
-        Accounts {
-            owner: OWNER_ADDRESS.try_into().unwrap(),
-            offerer: offerer.contract_address,
-            fulfiller: fulfiller.contract_address,
-            recipient: offerer.contract_address,
+        let erc20 = IMockERC20Dispatcher {
+            contract_address: declare_and_deploy("MockERC20", array![owner.into()]),
+        };
+        let erc721 = IMockERC721Dispatcher {
+            contract_address: declare_and_deploy("MockERC721", array![owner.into()]),
+        };
+        let medialane = IMedialaneDispatcher {
+            contract_address: declare_and_deploy(
+                "Medialane721", array![erc20.contract_address.into()],
+            ),
+        };
+
+        Env {
+            medialane,
+            erc20,
+            erc721,
+            offerer,
+            offerer_sk: OFFERER_SK,
+            fulfiller,
+            fulfiller_sk: FULFILLER_SK,
         }
     }
 
-    fn deploy_contract(
-        contract_name: ByteArray, calldata: @Array<felt252>, contract_address: ContractAddress,
-    ) -> ContractAddress {
-        let contract = declare(contract_name).unwrap().contract_class();
-        let (contract_address, _) = contract.deploy_at(calldata, contract_address).unwrap();
-        contract_address
-    }
-
-    fn deploy_medialane(native_token: ContractAddress) -> IMedialaneDispatcher {
-        // Fixed address for deterministic SNIP-12 domain (contract address is part of domain).
-        let expected_medialane_contract: ContractAddress =
-            0x2a0626d1a71fab6c6cdcb262afc48bff92a6844700ebbd16297596e6c53da29
-            .try_into()
-            .unwrap();
-
-        let mut constructor_calldata = array![];
-        native_token.serialize(ref constructor_calldata);
-        let contract_address = deploy_contract(
-            "Medialane", @constructor_calldata, expected_medialane_contract,
-        );
-        IMedialaneDispatcher { contract_address }
-    }
-
-    fn deploy_erc20(owner: ContractAddress) -> IMockERC20Dispatcher {
-        let expected_erc20: ContractAddress =
-            0x0589edc6e13293530fec9cad58787ed8cff1fce35c3ef80342b7b00651e04d1f
-            .try_into()
-            .unwrap();
-
-        let mut constructor_calldata = array![];
-        owner.serialize(ref constructor_calldata);
-        let contract_address = deploy_contract("MockERC20", @constructor_calldata, expected_erc20);
-
-        IMockERC20Dispatcher { contract_address }
-    }
-
-    fn deploy_erc721(owner: ContractAddress) -> IMockERC721Dispatcher {
-        let expected_erc721: ContractAddress =
-            0x01be0d1cd01de34f946a40e8cc305b67ebb13bca8472484b33e408be03de39fe
-            .try_into()
-            .unwrap();
-
-        let mut constructor_calldata = array![];
-        owner.serialize(ref constructor_calldata);
-        let contract_address = deploy_contract(
-            "MockERC721", @constructor_calldata, expected_erc721,
-        );
-
-        IMockERC721Dispatcher { contract_address }
-    }
-
-    fn deploy_erc1155(owner: ContractAddress) -> IMockERC1155Dispatcher {
-        let expected_erc1155: ContractAddress =
-            0x07ca2d381f55b159ea4c80abf84d4343fde9989854a6be2f02585daae7d89d76
-            .try_into()
-            .unwrap();
-
-        let mut constructor_calldata = array![];
-        owner.serialize(ref constructor_calldata);
-        let contract_address = deploy_contract(
-            "MockERC1155", @constructor_calldata, expected_erc1155,
-        );
-        IMockERC1155Dispatcher { contract_address }
-    }
-
-    fn deploy_account(
-        public_key: ContractAddress, account: ContractAddress,
-    ) -> AccountABIDispatcher {
-        let mut constructor_calldata = array![];
-        public_key.serialize(ref constructor_calldata);
-        let contract_address = deploy_contract("MockAccount", @constructor_calldata, account);
-        AccountABIDispatcher { contract_address }
-    }
-
-    fn setup_contracts_and_accounts() -> (DeployedContracts, Accounts) {
-        let accounts = setup_accounts();
-        let erc20_contract = deploy_erc20(accounts.owner);
-        let medialane_contract = deploy_medialane(erc20_contract.contract_address);
-        let erc721_contract = deploy_erc721(accounts.owner);
-        let erc1155_contract = deploy_erc1155(accounts.owner);
-
-        (
-            DeployedContracts {
-                medialane: medialane_contract,
-                erc20: erc20_contract,
-                erc721: erc721_contract,
-                erc1155: erc1155_contract,
-            },
-            accounts,
-        )
-    }
-
-    fn get_default_order_parameters(
-        offerer: ContractAddress,
-        offer: OfferItem,
-        consideration: ConsiderationItem,
-        nonce: felt252,
-        salt: felt252,
-    ) -> OrderParameters {
+    /// A fixed-price ERC721 listing: offer the NFT, ask for ERC20 `PRICE`.
+    fn listing_params(env: @Env) -> OrderParameters {
         OrderParameters {
-            offerer: offerer,
-            offer: offer,
-            consideration: consideration,
-            start_time: 1000000000,
-            end_time: 1000003600,
-            salt: salt,
-            nonce: nonce,
+            offerer: *env.offerer,
+            marketplace: *env.medialane.contract_address,
+            offer: OfferItem {
+                item_type: 'ERC721',
+                token: *env.erc721.contract_address,
+                identifier_or_criteria: TOKEN_ID,
+                amount: 1,
+            },
+            consideration: ConsiderationItem {
+                item_type: 'ERC20',
+                token: *env.erc20.contract_address,
+                identifier_or_criteria: 0,
+                amount: PRICE,
+                recipient: *env.offerer,
+            },
+            royalty_max_bps: 1000,
+            start_time: 0,
+            end_time: 0,
+            salt: 1,
+            counter: 0,
         }
     }
 
-    fn mint_erc20(
-        contract: IMockERC20Dispatcher,
-        minter: ContractAddress,
-        recipient: ContractAddress,
-        amount: u256,
-    ) {
-        cheat_caller_address(contract.contract_address, minter, CheatSpan::TargetCalls(1));
-        contract.mint_token(recipient, amount);
-    }
-
-    fn mint_erc721(
-        ref contract: IMockERC721Dispatcher,
-        minter: ContractAddress,
-        recipient: ContractAddress,
-        token_id: u256,
-    ) {
-        cheat_caller_address(contract.contract_address, minter, CheatSpan::TargetCalls(1));
-        contract.mint_token(recipient, token_id);
-    }
-
-    fn mint_erc1155(
-        contract: IMockERC1155Dispatcher,
-        minter: ContractAddress,
-        recipient: ContractAddress,
-        token_id: u256,
-        amount: u256,
-    ) {
-        cheat_caller_address(contract.contract_address, minter, CheatSpan::TargetCalls(1));
-        contract.mint(recipient, token_id, amount, array![].span());
-    }
-
-    fn approve_erc20(
-        contract: IMockERC20Dispatcher,
-        owner: ContractAddress,
-        spender: ContractAddress,
-        amount: u256,
-    ) {
-        cheat_caller_address(contract.contract_address, owner, CheatSpan::TargetCalls(1));
-        contract.approve_token(spender, amount);
-    }
-
-    fn approve_erc721(
-        contract: IMockERC721Dispatcher,
-        owner: ContractAddress,
-        spender: ContractAddress,
-        token_id: u256,
-    ) {
-        cheat_caller_address(contract.contract_address, owner, CheatSpan::TargetCalls(1));
-        contract.approve_token(spender, token_id);
-    }
-
-    fn approve_erc1155(
-        contract: IMockERC1155Dispatcher, owner: ContractAddress, spender: ContractAddress,
-    ) {
-        cheat_caller_address(contract.contract_address, owner, CheatSpan::TargetCalls(1));
-        contract.approve(spender, true);
-    }
-
-    #[test]
-    fn test_register_valid_order() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-
-        mint_erc721(
-            ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        approve_erc721(
-            contracts.erc721,
-            accounts.offerer,
-            contracts.medialane.contract_address,
-            felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: 1000000,
-            end_amount: 1000000,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        let mut spy = spy_events();
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-
-        let order_details = contracts.medialane.get_order_details(order_hash);
-
-        assert_eq!(order_details.offerer, accounts.offerer, "offerer mismatch");
-        assert_eq!(order_details.offer, offer, "offer mismatch");
-        assert_eq!(order_details.consideration, consideration, "consideration mismatch");
-        assert_eq!(order_details.order_status, OrderStatus::Created, "status mismatch");
-
-        spy
-            .assert_emitted(
-                @array![
-                    (
-                        contracts.medialane.contract_address,
-                        Medialane::Event::OrderCreated(
-                            OrderCreated { order_hash: order_hash, offerer: accounts.offerer },
-                        ),
-                    ),
-                ],
-            );
-    }
-
-    #[test]
-    fn test_fulfill_valid_order() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-
-        let Ierc20 = IERC20Dispatcher { contract_address: contracts.erc20.contract_address };
-        let Ierc721 = IERC721Dispatcher { contract_address: contracts.erc721.contract_address };
-
-        let offerer_initial_balance = Ierc20.balance_of(accounts.offerer);
-
-        mint_erc721(
-            ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        assert!(Ierc721.owner_of(felt_to_u256(NFT_TOKEN_ID)) == accounts.offerer, "mint error");
-
-        approve_erc721(
-            contracts.erc721,
-            accounts.offerer,
-            contracts.medialane.contract_address,
-            felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        let mut spy = spy_events();
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-
-        let order_fulfillment_intent = OrderFulfillment {
-            order_hash, fulfiller: accounts.fulfiller, nonce: 0,
-        };
-
-        let fulfillment_request = FulfillmentRequest {
-            fulfillment: order_fulfillment_intent, signature: erc20_erc721_fulfilment_signature(),
-        };
-
-        mint_erc20(contracts.erc20, accounts.owner, accounts.fulfiller, felt_to_u256(ERC20_AMOUNT));
-
-        approve_erc20(
-            contracts.erc20,
-            accounts.fulfiller,
-            contracts.medialane.contract_address,
-            felt_to_u256(ERC20_AMOUNT),
-        );
-
-        start_cheat_block_timestamp(
-            contracts.medialane.contract_address, 1000000000 + get_block_timestamp() + 100,
-        );
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.fulfiller, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.fulfill_order(fulfillment_request);
-        let order_details = contracts.medialane.get_order_details(order_hash);
-
-        assert_eq!(order_details.order_status, OrderStatus::Filled, "status mismatch");
-        assert_eq!(order_details.fulfiller, Option::Some(accounts.fulfiller), "fulfiller mismatch");
-
-        let offerer_current_balance = Ierc20.balance_of(accounts.offerer);
-        assert_eq!(
-            offerer_initial_balance + felt_to_u256(ERC20_AMOUNT),
-            offerer_current_balance,
-            "offerer balance mismatch",
-        );
-        assert_eq!(
-            Ierc721.owner_of(felt_to_u256(NFT_TOKEN_ID)),
-            accounts.fulfiller,
-            "fulfiller should own nft",
-        );
-
-        spy
-            .assert_emitted(
-                @array![
-                    (
-                        contracts.medialane.contract_address,
-                        Medialane::Event::OrderFulfilled(
-                            OrderFulfilled {
-                                order_hash: order_hash,
-                                offerer: accounts.offerer,
-                                fulfiller: accounts.fulfiller,
-                            },
-                        ),
-                    ),
-                ],
-            );
-        stop_cheat_block_timestamp(contracts.medialane.contract_address);
-    }
-
-
-    #[test]
-    fn test_cancel_valid_order() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-
-        mint_erc721(
-            ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        let mut spy = spy_events();
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-
-        let order_cancelation_intent = OrderCancellation {
-            order_hash, offerer: accounts.offerer, nonce: 1,
-        };
-
-        let cancelation_request = CancelRequest {
-            cancelation: order_cancelation_intent, signature: erc20_erc721_cancel_signature(),
-        };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.cancel_order(cancelation_request);
-
-        let order_details = contracts.medialane.get_order_details(order_hash);
-
-        assert_eq!(order_details.order_status, OrderStatus::Cancelled, "status mismatch");
-        spy
-            .assert_emitted(
-                @array![
-                    (
-                        contracts.medialane.contract_address,
-                        Medialane::Event::OrderCancelled(
-                            OrderCancelled { order_hash: order_hash, offerer: accounts.offerer },
-                        ),
-                    ),
-                ],
-            );
-    }
-
-    #[test]
-    #[should_panic(expected: "Invalid signature")]
-    fn test_register_revert_invalid_signature() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-
-        let order_with_invalid_sig = Order { parameters, signature: invalid_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.register_order(order_with_invalid_sig);
-    }
-
-    #[test]
-    fn test_register_allows_order_after_start_time_but_before_expiry() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        start_cheat_block_timestamp(contracts.medialane.contract_address, 1000000100);
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-        let order_details = contracts.medialane.get_order_details(order_hash);
-        assert_eq!(order_details.order_status, OrderStatus::Created, "status mismatch");
-
-        stop_cheat_block_timestamp(contracts.medialane.contract_address);
-    }
-
-    #[test]
-    #[should_panic(expected: "Order already created")]
-    fn test_register_revert_duplicate_order() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-        let order_1 = Order { parameters, signature: erc20_erc721_signature() };
-        let order_2 = Order { parameters, signature: erc20_erc721_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(2),
-        );
-        contracts.medialane.register_order(order_1);
-        contracts.medialane.register_order(order_2);
-    }
-
-    #[test]
-    #[should_panic(expected: "Invalid time window")]
-    fn test_register_revert_invalid_time_window() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = OrderParameters {
-            offerer: accounts.offerer,
-            offer,
-            consideration,
-            start_time: 1000003600,
-            end_time: 1000003600,
-            salt: 0,
-            nonce: 0,
-        };
-        let order = Order { parameters, signature: invalid_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.register_order(order);
-    }
-
-    #[test]
-    #[should_panic(expected: "Token address cannot be zero")]
-    fn test_register_revert_zero_offer_token() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-        let zero_address: ContractAddress = 0.try_into().unwrap();
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: zero_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-        let order = Order { parameters, signature: invalid_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.register_order(order);
-    }
-
-    #[test]
-    #[should_panic(expected: "Recipient cannot be zero")]
-    fn test_register_revert_zero_consideration_recipient() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-        let zero_address: ContractAddress = 0.try_into().unwrap();
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: zero_address,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-        let order = Order { parameters, signature: invalid_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.register_order(order);
-    }
-
-    #[test]
-    #[should_panic(expected: "Invalid identifier")]
-    fn test_register_revert_nonzero_erc20_identifier() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 1,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-        let order = Order { parameters, signature: invalid_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.register_order(order);
-    }
-
-    #[test]
-    #[should_panic(expected: "Token address must be zero")]
-    fn test_register_revert_native_token_field_nonzero() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'NATIVE',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-        let order = Order { parameters, signature: invalid_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.register_order(order);
-    }
-
-    #[test]
-    #[should_panic(expected: "Invalid amount")]
-    fn test_register_revert_invalid_erc721_amount() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 2.into(),
-            end_amount: 2.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-        let order = Order { parameters, signature: invalid_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.register_order(order);
-    }
-
-
-    #[test]
-    #[should_panic(expected: "Invalid signature")]
-    fn test_fulfill_revert_invalid_signature() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-
-        mint_erc721(
-            ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-
-        let order_fulfillment_intent = OrderFulfillment {
-            order_hash, fulfiller: accounts.fulfiller, nonce: 0,
-        };
-
-        let fulfillment_request_with_invalid_signature = FulfillmentRequest {
-            fulfillment: order_fulfillment_intent, signature: invalid_signature(),
-        };
-
-        mint_erc20(contracts.erc20, accounts.owner, accounts.fulfiller, felt_to_u256(ERC20_AMOUNT));
-
-        approve_erc20(
-            contracts.erc20,
-            accounts.fulfiller,
-            contracts.medialane.contract_address,
-            felt_to_u256(ERC20_AMOUNT),
-        );
-
-        start_cheat_block_timestamp(
-            contracts.medialane.contract_address, 1000000000 + get_block_timestamp() + 100,
-        );
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.fulfiller, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.fulfill_order(fulfillment_request_with_invalid_signature);
-    }
-
-    #[test]
-    #[should_panic(expected: "Caller not fulfiller")]
-    fn test_fulfill_revert_wrong_caller() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-
-        mint_erc721(
-            ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        approve_erc721(
-            contracts.erc721,
-            accounts.offerer,
-            contracts.medialane.contract_address,
-            felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-        let fulfillment_request = FulfillmentRequest {
-            fulfillment: OrderFulfillment {
-                order_hash, fulfiller: accounts.fulfiller, nonce: 0,
+    /// A bid: offer ERC20 `PRICE`, ask for the NFT (delivered to the bidder).
+    fn bid_params(env: @Env) -> OrderParameters {
+        OrderParameters {
+            offerer: *env.offerer,
+            marketplace: *env.medialane.contract_address,
+            offer: OfferItem {
+                item_type: 'ERC20',
+                token: *env.erc20.contract_address,
+                identifier_or_criteria: 0,
+                amount: PRICE,
             },
-            signature: erc20_erc721_fulfilment_signature(),
-        };
-
-        mint_erc20(contracts.erc20, accounts.owner, accounts.fulfiller, felt_to_u256(ERC20_AMOUNT));
-        approve_erc20(
-            contracts.erc20,
-            accounts.fulfiller,
-            contracts.medialane.contract_address,
-            felt_to_u256(ERC20_AMOUNT),
-        );
-
-        start_cheat_block_timestamp(
-            contracts.medialane.contract_address, 1000000000 + get_block_timestamp() + 100,
-        );
-
-        let wrong_caller: ContractAddress = 0xbad.try_into().unwrap();
-        cheat_caller_address(
-            contracts.medialane.contract_address, wrong_caller, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.fulfill_order(fulfillment_request);
-    }
-
-    #[test]
-    #[should_panic(expected: "Fulfiller cannot be zero")]
-    fn test_fulfill_revert_zero_fulfiller() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-        let zero_address: ContractAddress = 0.try_into().unwrap();
-
-        mint_erc721(
-            ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        approve_erc721(
-            contracts.erc721,
-            accounts.offerer,
-            contracts.medialane.contract_address,
-            felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-        let fulfillment_request = FulfillmentRequest {
-            fulfillment: OrderFulfillment { order_hash, fulfiller: zero_address, nonce: 0 },
-            signature: invalid_signature(),
-        };
-
-        start_cheat_block_timestamp(
-            contracts.medialane.contract_address, 1000000000 + get_block_timestamp() + 100,
-        );
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, zero_address, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.fulfill_order(fulfillment_request);
-    }
-
-    #[test]
-    #[should_panic(expected: "Order expired")]
-    fn test_fulfill_revert_expired() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-
-        mint_erc721(
-            ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-
-        let order_fulfillment_intent = OrderFulfillment {
-            order_hash, fulfiller: accounts.fulfiller, nonce: 0,
-        };
-
-        let fulfillment_request = FulfillmentRequest {
-            fulfillment: order_fulfillment_intent, signature: erc20_erc721_fulfilment_signature(),
-        };
-
-        mint_erc20(contracts.erc20, accounts.owner, accounts.fulfiller, felt_to_u256(ERC20_AMOUNT));
-
-        approve_erc20(
-            contracts.erc20,
-            accounts.fulfiller,
-            contracts.medialane.contract_address,
-            felt_to_u256(ERC20_AMOUNT),
-        );
-
-        start_cheat_block_timestamp(
-            contracts.medialane.contract_address, 1000003600 + get_block_timestamp() + 100,
-        );
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.fulfiller, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.fulfill_order(fulfillment_request);
-    }
-
-    #[test]
-    #[should_panic(expected: "Order not yet valid")]
-    fn test_fulfill_revert_not_yet_valid() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-
-        mint_erc721(
-            ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-
-        let order_fulfillment_intent = OrderFulfillment {
-            order_hash, fulfiller: accounts.fulfiller, nonce: 0,
-        };
-
-        let fulfillment_request = FulfillmentRequest {
-            fulfillment: order_fulfillment_intent, signature: erc20_erc721_fulfilment_signature(),
-        };
-
-        mint_erc20(contracts.erc20, accounts.owner, accounts.fulfiller, felt_to_u256(ERC20_AMOUNT));
-
-        approve_erc20(
-            contracts.erc20,
-            accounts.fulfiller,
-            contracts.medialane.contract_address,
-            felt_to_u256(ERC20_AMOUNT),
-        );
-
-        start_cheat_block_timestamp(
-            contracts.medialane.contract_address, get_block_timestamp() + 100,
-        );
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.fulfiller, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.fulfill_order(fulfillment_request);
-    }
-
-    #[test]
-    #[should_panic(expected: "Order already filled")]
-    fn test_fulfill_revert_already_filled() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-
-        mint_erc721(
-            ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        approve_erc721(
-            contracts.erc721,
-            accounts.offerer,
-            contracts.medialane.contract_address,
-            felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-
-        let order_fulfillment_intent = OrderFulfillment {
-            order_hash, fulfiller: accounts.fulfiller, nonce: 0,
-        };
-
-        let fulfillment_request_1 = FulfillmentRequest {
-            fulfillment: order_fulfillment_intent, signature: erc20_erc721_fulfilment_signature(),
-        };
-
-        let fulfillment_request_2 = FulfillmentRequest {
-            fulfillment: order_fulfillment_intent, signature: erc20_erc721_fulfilment_signature(),
-        };
-
-        mint_erc20(contracts.erc20, accounts.owner, accounts.fulfiller, felt_to_u256(ERC20_AMOUNT));
-
-        approve_erc20(
-            contracts.erc20,
-            accounts.fulfiller,
-            contracts.medialane.contract_address,
-            felt_to_u256(ERC20_AMOUNT),
-        );
-
-        start_cheat_block_timestamp(
-            contracts.medialane.contract_address, 1000000000 + get_block_timestamp() + 100,
-        );
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.fulfiller, CheatSpan::TargetCalls(2),
-        );
-
-        contracts.medialane.fulfill_order(fulfillment_request_1);
-
-        contracts.medialane.fulfill_order(fulfillment_request_2);
-    }
-
-    #[test]
-    #[should_panic(expected: "Order already filled")]
-    fn test_cancel_revert_already_filled() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-
-        mint_erc721(
-            ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        approve_erc721(
-            contracts.erc721,
-            accounts.offerer,
-            contracts.medialane.contract_address,
-            felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-
-        let order_fulfillment_intent = OrderFulfillment {
-            order_hash, fulfiller: accounts.fulfiller, nonce: 0,
-        };
-
-        let fulfillment_request = FulfillmentRequest {
-            fulfillment: order_fulfillment_intent, signature: erc20_erc721_fulfilment_signature(),
-        };
-
-        mint_erc20(contracts.erc20, accounts.owner, accounts.fulfiller, felt_to_u256(ERC20_AMOUNT));
-
-        approve_erc20(
-            contracts.erc20,
-            accounts.fulfiller,
-            contracts.medialane.contract_address,
-            felt_to_u256(ERC20_AMOUNT),
-        );
-
-        start_cheat_block_timestamp(
-            contracts.medialane.contract_address, 1000000000 + get_block_timestamp() + 100,
-        );
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.fulfiller, CheatSpan::TargetCalls(2),
-        );
-
-        contracts.medialane.fulfill_order(fulfillment_request);
-
-        let order_cancelation_intent = OrderCancellation {
-            order_hash, offerer: accounts.offerer, nonce: 1,
-        };
-
-        let cancelation_request = CancelRequest {
-            cancelation: order_cancelation_intent, signature: erc20_erc721_cancel_signature(),
-        };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.cancel_order(cancelation_request);
-
-        stop_cheat_block_timestamp(contracts.medialane.contract_address);
-    }
-
-    #[test]
-    #[should_panic(expected: "Caller not offerer")]
-    fn test_cancel_revert_wrong_offerer() {
-        let (mut contracts, accounts) = setup_contracts_and_accounts();
-
-        mint_erc721(
-            ref contracts.erc721, accounts.owner, accounts.offerer, felt_to_u256(NFT_TOKEN_ID),
-        );
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: contracts.erc721.contract_address,
-            identifier_or_criteria: NFT_TOKEN_ID,
-            start_amount: 1.into(),
-            end_amount: 1.into(),
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: contracts.erc20.contract_address,
-            identifier_or_criteria: 0,
-            start_amount: ERC20_AMOUNT,
-            end_amount: ERC20_AMOUNT,
-            recipient: accounts.offerer,
-        };
-
-        let parameters = get_default_order_parameters(accounts.offerer, offer, consideration, 0, 0);
-        let order = Order { parameters, signature: erc20_erc721_signature() };
-
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
-        );
-        contracts.medialane.register_order(order);
-
-        let order_hash = contracts.medialane.get_order_hash(parameters, accounts.offerer);
-        let wrong_offerer: ContractAddress = 0xbad.try_into().unwrap();
-        let cancelation_request = CancelRequest {
-            cancelation: OrderCancellation {
-                order_hash, offerer: wrong_offerer, nonce: 1,
+            consideration: ConsiderationItem {
+                item_type: 'ERC721',
+                token: *env.erc721.contract_address,
+                identifier_or_criteria: TOKEN_ID,
+                amount: 1,
+                recipient: *env.offerer,
             },
-            signature: erc20_erc721_cancel_signature(),
-        };
+            royalty_max_bps: 1000,
+            start_time: 0,
+            end_time: 0,
+            salt: 1,
+            counter: 0,
+        }
+    }
 
-        cheat_caller_address(
-            contracts.medialane.contract_address, accounts.offerer, CheatSpan::TargetCalls(1),
+    /// Sign a set of order parameters as `signer_sk` and wrap into an `Order`.
+    fn signed_order(env: @Env, params: OrderParameters, signer_sk: felt252) -> Order {
+        let hash = (*env.medialane).get_order_hash(params, params.offerer);
+        let kp = KeyPairTrait::<felt252, felt252>::from_secret_key(signer_sk);
+        let (r, s) = kp.sign(hash).unwrap();
+        Order { parameters: params, signature: array![r, s] }
+    }
+
+    fn call_as(target: ContractAddress, caller: ContractAddress) {
+        cheat_caller_address(target, caller, CheatSpan::TargetCalls(1));
+    }
+
+    /// Mint the NFT to the offerer + approve the marketplace, fund + approve the
+    /// fulfiller's ERC20, register the listing, and return its hash.
+    fn setup_fulfillable_listing(env: @Env) -> felt252 {
+        let medialane = *env.medialane.contract_address;
+        let erc721 = *env.erc721;
+        let erc20 = *env.erc20;
+
+        call_as(erc721.contract_address, OWNER.try_into().unwrap());
+        erc721.mint_token(*env.offerer, TOKEN_ID.into());
+        call_as(erc721.contract_address, *env.offerer);
+        erc721.approve_token(medialane, TOKEN_ID.into());
+
+        call_as(erc20.contract_address, OWNER.try_into().unwrap());
+        erc20.mint_token(*env.fulfiller, PRICE.into());
+        call_as(erc20.contract_address, *env.fulfiller);
+        erc20.approve_token(medialane, PRICE.into());
+
+        let params = listing_params(env);
+        let hash = (*env.medialane).get_order_hash(params, params.offerer);
+        (*env.medialane).register_order(signed_order(env, params, *env.offerer_sk));
+        hash
+    }
+
+    #[test]
+    #[should_panic(expected: 'Cannot fill own order')]
+    fn test_fulfill_rejects_self_fill() {
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+        call_as(env.medialane.contract_address, env.offerer);
+        env.medialane.fulfill_order(hash);
+    }
+
+    const ROYALTY_RECEIVER: felt252 = 0x5005;
+
+    /// Deploy a 2981 NFT (`bps` royalty), list it, fund + approve the buyer.
+    /// Returns the order hash. `royalty_max_bps` on the order is fixed at 1000 (10%).
+    fn setup_royalty_listing(env: @Env, bps: u128) -> felt252 {
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let receiver: ContractAddress = ROYALTY_RECEIVER.try_into().unwrap();
+        let roy = IMockERC721RoyaltyDispatcher {
+            contract_address: declare_and_deploy(
+                "MockERC721Royalty", array![owner.into(), receiver.into(), bps.into()],
+            ),
+        };
+        call_as(roy.contract_address, owner);
+        roy.mint_token(*env.offerer, TOKEN_ID.into());
+        call_as(roy.contract_address, *env.offerer);
+        roy.approve_token(*env.medialane.contract_address, TOKEN_ID.into());
+
+        let erc20 = *env.erc20;
+        call_as(erc20.contract_address, owner);
+        erc20.mint_token(*env.fulfiller, PRICE.into());
+        call_as(erc20.contract_address, *env.fulfiller);
+        erc20.approve_token(*env.medialane.contract_address, PRICE.into());
+
+        let mut params = listing_params(env);
+        params.offer.token = roy.contract_address;
+        let hash = (*env.medialane).get_order_hash(params, params.offerer);
+        (*env.medialane).register_order(signed_order(env, params, *env.offerer_sk));
+        hash
+    }
+
+    #[test]
+    fn test_fulfill_pays_royalty() {
+        // NFT royalty 5%, order cap 10% → full 5% paid to the creator.
+        let env = setup();
+        let hash = setup_royalty_listing(@env, 500);
+        let receiver: ContractAddress = ROYALTY_RECEIVER.try_into().unwrap();
+
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash);
+
+        let royalty: u256 = 50000; // 5% of 1_000_000
+        assert!(env.erc20.get_balance(receiver) == royalty, "creator royalty mismatch");
+        assert!(env.erc20.get_balance(env.offerer) == PRICE.into() - royalty, "seller net mismatch");
+    }
+
+    #[test]
+    fn test_fulfill_caps_royalty_at_signed_bound() {
+        // NFT royalty 50%, but the seller signed a 10% cap → only 10% paid (F8).
+        let env = setup();
+        let hash = setup_royalty_listing(@env, 5000);
+        let receiver: ContractAddress = ROYALTY_RECEIVER.try_into().unwrap();
+
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash);
+
+        let capped: u256 = 100000; // 10% of 1_000_000
+        assert!(env.erc20.get_balance(receiver) == capped, "royalty should be capped");
+        assert!(env.erc20.get_balance(env.offerer) == PRICE.into() - capped, "seller net mismatch");
+    }
+
+    #[test]
+    fn test_fulfill_listing_no_royalty() {
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash);
+
+        assert!(env.erc721.get_owner(TOKEN_ID.into()) == env.fulfiller, "NFT should move to buyer");
+        assert!(env.erc20.get_balance(env.offerer) == PRICE.into(), "seller should receive price");
+        assert!(
+            env.medialane.get_order_details(hash).order_status == OrderStatus::Filled,
+            "order should be Filled",
         );
-        contracts.medialane.cancel_order(cancelation_request);
+    }
+
+    #[test]
+    fn test_fulfill_bid() {
+        // Bid: offerer offers ERC20, the NFT owner (fulfiller) accepts.
+        let env = setup();
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+
+        // Fulfiller owns the NFT and approves the marketplace.
+        call_as(env.erc721.contract_address, owner);
+        env.erc721.mint_token(env.fulfiller, TOKEN_ID.into());
+        call_as(env.erc721.contract_address, env.fulfiller);
+        env.erc721.approve_token(env.medialane.contract_address, TOKEN_ID.into());
+
+        // Bidder (offerer) funds + approves the ERC20.
+        call_as(env.erc20.contract_address, owner);
+        env.erc20.mint_token(env.offerer, PRICE.into());
+        call_as(env.erc20.contract_address, env.offerer);
+        env.erc20.approve_token(env.medialane.contract_address, PRICE.into());
+
+        let params = bid_params(@env);
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash);
+
+        assert!(env.erc721.get_owner(TOKEN_ID.into()) == env.offerer, "NFT should go to bidder");
+        assert!(env.erc20.get_balance(env.fulfiller) == PRICE.into(), "seller should be paid");
+    }
+
+    // --- cancellation + bulk-cancel counter ---
+
+    fn signed_cancel(env: @Env, order_hash: felt252, signer_sk: felt252) -> CancelRequest {
+        let cancellation = OrderCancellation { order_hash, offerer: *env.offerer };
+        let hash = (*env.medialane).get_cancellation_hash(cancellation, *env.offerer);
+        let kp = KeyPairTrait::<felt252, felt252>::from_secret_key(signer_sk);
+        let (r, s) = kp.sign(hash).unwrap();
+        CancelRequest { cancelation: cancellation, signature: array![r, s] }
+    }
+
+    #[test]
+    fn test_cancel_marks_cancelled() {
+        let env = setup();
+        let params = listing_params(@env);
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        env.medialane.cancel_order(signed_cancel(@env, hash, env.offerer_sk));
+
+        assert!(
+            env.medialane.get_order_details(hash).order_status == OrderStatus::Cancelled,
+            "order should be Cancelled",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected: 'Invalid signature')]
+    fn test_cancel_rejects_wrong_signer() {
+        let env = setup();
+        let params = listing_params(@env);
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+        // Cancellation signed by the fulfiller's key.
+        env.medialane.cancel_order(signed_cancel(@env, hash, env.fulfiller_sk));
+    }
+
+    #[test]
+    fn test_increment_counter_invalidates_new_orders() {
+        let env = setup();
+        // Bump the offerer's epoch.
+        call_as(env.medialane.contract_address, env.offerer);
+        env.medialane.increment_counter();
+        assert!(env.medialane.get_counter(env.offerer) == 1, "counter should be 1");
+    }
+
+    #[test]
+    #[should_panic(expected: 'Invalid counter')]
+    fn test_order_under_old_counter_rejected_after_bump() {
+        let env = setup();
+        call_as(env.medialane.contract_address, env.offerer);
+        env.medialane.increment_counter();
+        // listing_params uses counter 0, now stale.
+        let params = listing_params(@env);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
+    fn test_register_listing_stores_created() {
+        let env = setup();
+        let params = listing_params(@env);
+        let order = signed_order(@env, params, env.offerer_sk);
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+
+        env.medialane.register_order(order);
+
+        let details = env.medialane.get_order_details(hash);
+        assert!(details.order_status == OrderStatus::Created, "order should be Created");
+        assert!(details.offerer == env.offerer, "offerer mismatch");
+        assert!(details.consideration.amount == PRICE, "price mismatch");
+        assert!(details.royalty_max_bps == 1000, "royalty bound mismatch");
+    }
+
+    #[test]
+    #[should_panic(expected: 'Invalid signature')]
+    fn test_register_rejects_invalid_signature() {
+        let env = setup();
+        let params = listing_params(@env);
+        // Signed by the fulfiller's key, not the offerer's.
+        let order = signed_order(@env, params, env.fulfiller_sk);
+        env.medialane.register_order(order);
+    }
+
+    #[test]
+    #[should_panic(expected: 'Wrong marketplace')]
+    fn test_register_rejects_wrong_marketplace() {
+        let env = setup();
+        let mut params = listing_params(@env);
+        // Order targets a different deployment (S1 replay protection).
+        params.marketplace = 0xdead.try_into().unwrap();
+        let order = signed_order(@env, params, env.offerer_sk);
+        env.medialane.register_order(order);
+    }
+
+    #[test]
+    #[should_panic(expected: 'Invalid counter')]
+    fn test_register_rejects_stale_counter() {
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.counter = 5; // contract counter for offerer is 0
+        let order = signed_order(@env, params, env.offerer_sk);
+        env.medialane.register_order(order);
+    }
+
+    #[test]
+    #[should_panic(expected: 'Order already created')]
+    fn test_register_rejects_duplicate() {
+        let env = setup();
+        let params = listing_params(@env);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
+    #[should_panic(expected: 'Offerer cannot be zero')]
+    fn test_register_rejects_zero_offerer() {
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.offerer = 0.try_into().unwrap();
+        let order = signed_order(@env, params, env.offerer_sk);
+        env.medialane.register_order(order);
+    }
+
+    // --- shape allowlist + item validation ---
+
+    #[test]
+    fn test_register_accepts_bid() {
+        let env = setup();
+        let params = bid_params(@env);
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+        assert!(
+            env.medialane.get_order_details(hash).order_status == OrderStatus::Created,
+            "bid should register",
+        );
+    }
+
+    #[test]
+    fn test_register_allows_zero_price() {
+        // F9: a free listing (price 0) is a valid order; only token/recipient/NFT
+        // quantity must be non-zero.
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.consideration.amount = 0;
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+        assert!(
+            env.medialane.get_order_details(hash).order_status == OrderStatus::Created,
+            "zero-price listing should register",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected: 'Unsupported trade shape')]
+    fn test_register_rejects_nft_for_nft() {
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.consideration.item_type = 'ERC721';
+        params.consideration.amount = 1;
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
+    #[should_panic(expected: 'Token address cannot be zero')]
+    fn test_register_rejects_zero_nft_token() {
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.offer.token = 0.try_into().unwrap();
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
+    #[should_panic(expected: 'Invalid amount')]
+    fn test_register_rejects_erc721_amount_not_one() {
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.offer.amount = 2;
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
+    #[should_panic(expected: 'Recipient cannot be zero')]
+    fn test_register_rejects_zero_recipient() {
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.consideration.recipient = 0.try_into().unwrap();
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
+    #[should_panic(expected: 'Token address must be zero')]
+    fn test_register_rejects_native_with_token() {
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.consideration.item_type = 'NATIVE';
+        // NATIVE must carry a zero token field.
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    // --- time window ---
+
+    #[test]
+    #[should_panic(expected: 'Order expired')]
+    fn test_register_rejects_expired() {
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.start_time = 0;
+        params.end_time = 100;
+        start_cheat_block_timestamp_global(200);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
+    #[should_panic(expected: 'Invalid time window')]
+    fn test_register_rejects_inverted_window() {
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.start_time = 200;
+        params.end_time = 100;
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
     }
 }

@@ -28,4 +28,12 @@ pub mod errors {
     pub const INVALID_ORDER_LENGTHS: felt252 = 'Invalid item lengths';
     pub const HASH_SERIALIZATION_FAILED: felt252 = 'Hash serialization failed';
     pub const INVALID_TIME_WINDOW: felt252 = 'Invalid time window';
+    // Redesign additions
+    pub const WRONG_MARKETPLACE: felt252 = 'Wrong marketplace';
+    pub const INVALID_COUNTER: felt252 = 'Invalid counter';
+    pub const SELF_FILL: felt252 = 'Cannot fill own order';
+    pub const UNSUPPORTED_SHAPE: felt252 = 'Unsupported trade shape';
+    pub const ROYALTY_EXCEEDS_SALE: felt252 = 'Royalty exceeds sale';
+    pub const ROYALTY_TRANSFER_FAILED: felt252 = 'Royalty transfer failed';
+    pub const REENTRANT_CALL: felt252 = 'Reentrant call';
 }

@@ -12,4 +12,5 @@ pub mod mocks {
     pub mod erc20;
     pub mod erc721;
     pub mod erc721_royalty;
+    pub mod malicious;
 }

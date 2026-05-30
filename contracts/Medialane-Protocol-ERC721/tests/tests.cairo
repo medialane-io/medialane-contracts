@@ -7,6 +7,9 @@ mod test {
     use medialane_protocol::mocks::erc721_royalty::{
         IMockERC721RoyaltyDispatcher, IMockERC721RoyaltyDispatcherTrait,
     };
+    use medialane_protocol::mocks::malicious::{
+        IMaliciousERC20Dispatcher, IMaliciousERC20DispatcherTrait,
+    };
     use snforge_std::signature::KeyPairTrait;
     use snforge_std::signature::stark_curve::{StarkCurveKeyPairImpl, StarkCurveSignerImpl};
     use snforge_std::{
@@ -491,5 +494,35 @@ mod test {
         params.start_time = 200;
         params.end_time = 100;
         env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
+    #[should_panic(expected: 'Reentrant call')]
+    fn test_fulfill_reentrancy_blocked() {
+        // A listing whose payment token reenters fulfill_order during settlement.
+        // The guard must abort the reentrant call.
+        let env = setup();
+        let medialane = env.medialane.contract_address;
+
+        let malicious = IMaliciousERC20Dispatcher {
+            contract_address: declare_and_deploy("MaliciousERC20", array![]),
+        };
+
+        // Offerer owns + approves the NFT (registration is valid).
+        call_as(env.erc721.contract_address, OWNER.try_into().unwrap());
+        env.erc721.mint_token(env.offerer, TOKEN_ID.into());
+        call_as(env.erc721.contract_address, env.offerer);
+        env.erc721.approve_token(medialane, TOKEN_ID.into());
+
+        // Consideration token = the malicious reentrant ERC20.
+        let mut params = listing_params(@env);
+        params.consideration.token = malicious.contract_address;
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        malicious.set_attack(medialane, hash);
+
+        call_as(medialane, env.fulfiller);
+        env.medialane.fulfill_order(hash); // _pay -> malicious.transfer_from -> reenter
     }
 }

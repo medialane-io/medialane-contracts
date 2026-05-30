@@ -265,4 +265,224 @@ mod test {
         params.end_time = 100;
         env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
     }
+
+    // --- fulfilment (partial fills) ---
+
+    fn erc1155(env: @Env) -> IERC1155Dispatcher {
+        IERC1155Dispatcher { contract_address: *env.erc1155.contract_address }
+    }
+
+    /// Mint UNITS of the 1155 to the offerer + approve; fund the fulfiller's ERC20
+    /// for a full fill (PRICE*UNITS) + approve. Register the listing; return hash.
+    fn setup_fulfillable_listing(env: @Env) -> felt252 {
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let medialane = *env.medialane.contract_address;
+
+        call_as(*env.erc1155.contract_address, owner);
+        (*env.erc1155).mint(*env.offerer, TOKEN_ID.into(), UNITS.into(), array![].span());
+        call_as(*env.erc1155.contract_address, *env.offerer);
+        (*env.erc1155).approve(medialane, true);
+
+        let total: u256 = (PRICE * UNITS).into();
+        call_as(*env.erc20.contract_address, owner);
+        (*env.erc20).mint_token(*env.fulfiller, total);
+        call_as(*env.erc20.contract_address, *env.fulfiller);
+        (*env.erc20).approve_token(medialane, total);
+
+        let params = listing_params(env);
+        let hash = (*env.medialane).get_order_hash(params, params.offerer);
+        (*env.medialane).register_order(signed_order(env, params, *env.offerer_sk));
+        hash
+    }
+
+    #[test]
+    #[should_panic(expected: 'Cannot fill own order')]
+    fn test_fulfill_rejects_self_fill() {
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+        call_as(env.medialane.contract_address, env.offerer);
+        env.medialane.fulfill_order(hash, UNITS);
+    }
+
+    #[test]
+    #[should_panic(expected: 'Quantity must be nonzero')]
+    fn test_fulfill_rejects_zero_quantity() {
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash, 0);
+    }
+
+    #[test]
+    #[should_panic(expected: 'Insufficient remaining units')]
+    fn test_fulfill_rejects_overfill() {
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash, UNITS + 1);
+    }
+
+    #[test]
+    fn test_fulfill_full_no_royalty() {
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash, UNITS);
+
+        assert!(
+            erc1155(@env).balance_of(env.fulfiller, TOKEN_ID.into()) == UNITS.into(),
+            "buyer should hold all units",
+        );
+        assert!(
+            env.erc20.get_balance(env.offerer) == (PRICE * UNITS).into(), "seller paid in full",
+        );
+        let details = env.medialane.get_order_details(hash);
+        assert!(details.order_status == OrderStatus::Filled, "should be Filled");
+        assert!(details.remaining_amount == 0, "remaining should be 0");
+    }
+
+    #[test]
+    fn test_fulfill_partial_keeps_open() {
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash, 40);
+
+        assert!(
+            erc1155(@env).balance_of(env.fulfiller, TOKEN_ID.into()) == 40_u256,
+            "buyer holds 40 units",
+        );
+        assert!(env.erc20.get_balance(env.offerer) == (PRICE * 40).into(), "seller paid for 40");
+        let details = env.medialane.get_order_details(hash);
+        assert!(details.order_status == OrderStatus::Created, "should stay Created");
+        assert!(details.remaining_amount == UNITS - 40, "remaining should be 60");
+    }
+
+    const ROYALTY_RECEIVER: felt252 = 0x5005;
+
+    #[test]
+    fn test_fulfill_pays_royalty() {
+        // 5% royalty, 10% cap → full 5% paid to the creator.
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let receiver: ContractAddress = ROYALTY_RECEIVER.try_into().unwrap();
+        call_as(env.erc1155.contract_address, owner);
+        env.erc1155.set_royalty(receiver, 500);
+
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash, UNITS);
+
+        let sale: u256 = (PRICE * UNITS).into();
+        let royalty: u256 = sale * 500 / 10000;
+        assert!(env.erc20.get_balance(receiver) == royalty, "creator royalty mismatch");
+        assert!(env.erc20.get_balance(env.offerer) == sale - royalty, "seller net mismatch");
+    }
+
+    #[test]
+    fn test_fulfill_caps_royalty_at_signed_bound() {
+        // 50% NFT royalty, but the seller signed a 10% cap → only 10% paid.
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let receiver: ContractAddress = ROYALTY_RECEIVER.try_into().unwrap();
+        call_as(env.erc1155.contract_address, owner);
+        env.erc1155.set_royalty(receiver, 5000);
+
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash, UNITS);
+
+        let sale: u256 = (PRICE * UNITS).into();
+        let capped: u256 = sale * 1000 / 10000; // 10%
+        assert!(env.erc20.get_balance(receiver) == capped, "royalty should be capped");
+        assert!(env.erc20.get_balance(env.offerer) == sale - capped, "seller net mismatch");
+    }
+
+    #[test]
+    fn test_fulfill_bid() {
+        let env = setup();
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let medialane = env.medialane.contract_address;
+
+        // Seller (fulfiller) holds the units + approves.
+        call_as(env.erc1155.contract_address, owner);
+        env.erc1155.mint(env.fulfiller, TOKEN_ID.into(), UNITS.into(), array![].span());
+        call_as(env.erc1155.contract_address, env.fulfiller);
+        env.erc1155.approve(medialane, true);
+
+        // Bidder (offerer) funds + approves the ERC20 for a full fill.
+        let total: u256 = (PRICE * UNITS).into();
+        call_as(env.erc20.contract_address, owner);
+        env.erc20.mint_token(env.offerer, total);
+        call_as(env.erc20.contract_address, env.offerer);
+        env.erc20.approve_token(medialane, total);
+
+        let params = bid_params(@env);
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        call_as(medialane, env.fulfiller);
+        env.medialane.fulfill_order(hash, UNITS);
+
+        assert!(
+            erc1155(@env).balance_of(env.offerer, TOKEN_ID.into()) == UNITS.into(),
+            "bidder should receive units",
+        );
+        assert!(env.erc20.get_balance(env.fulfiller) == total, "seller should be paid");
+    }
+
+    // --- cancellation + bulk-cancel counter ---
+
+    fn signed_cancel(env: @Env, order_hash: felt252, signer_sk: felt252) -> CancelRequest {
+        let cancellation = OrderCancellation { order_hash, offerer: *env.offerer };
+        let hash = (*env.medialane).get_cancellation_hash(cancellation, *env.offerer);
+        let kp = KeyPairTrait::<felt252, felt252>::from_secret_key(signer_sk);
+        let (r, s) = kp.sign(hash).unwrap();
+        CancelRequest { cancelation: cancellation, signature: array![r, s] }
+    }
+
+    #[test]
+    fn test_cancel_marks_cancelled() {
+        let env = setup();
+        let params = listing_params(@env);
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        env.medialane.cancel_order(signed_cancel(@env, hash, env.offerer_sk));
+
+        assert!(
+            env.medialane.get_order_details(hash).order_status == OrderStatus::Cancelled,
+            "should be Cancelled",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected: 'Invalid signature')]
+    fn test_cancel_rejects_wrong_signer() {
+        let env = setup();
+        let params = listing_params(@env);
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+        env.medialane.cancel_order(signed_cancel(@env, hash, env.fulfiller_sk));
+    }
+
+    #[test]
+    fn test_increment_counter() {
+        let env = setup();
+        call_as(env.medialane.contract_address, env.offerer);
+        env.medialane.increment_counter();
+        assert!(env.medialane.get_counter(env.offerer) == 1, "counter should be 1");
+    }
+
+    #[test]
+    #[should_panic(expected: 'Invalid counter')]
+    fn test_order_under_old_counter_rejected_after_bump() {
+        let env = setup();
+        call_as(env.medialane.contract_address, env.offerer);
+        env.medialane.increment_counter();
+        let params = listing_params(@env); // counter 0, now stale
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
 }

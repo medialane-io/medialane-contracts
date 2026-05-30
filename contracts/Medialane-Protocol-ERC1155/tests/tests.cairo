@@ -519,4 +519,106 @@ mod test {
         call_as(medialane, env.fulfiller);
         env.medialane.fulfill_order(hash, UNITS); // _pay -> malicious.transfer_from -> reenter
     }
+
+    #[test]
+    fn test_fulfill_multi_step_partial() {
+        // Two sequential partial fills by the same buyer accumulate correctly.
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash, 40);
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash, 35);
+
+        assert!(
+            erc1155(@env).balance_of(env.fulfiller, TOKEN_ID.into()) == 75_u256,
+            "buyer should hold 75 units",
+        );
+        assert!(env.erc20.get_balance(env.offerer) == (PRICE * 75).into(), "seller paid for 75");
+        let details = env.medialane.get_order_details(hash);
+        assert!(details.order_status == OrderStatus::Created, "still open");
+        assert!(details.remaining_amount == UNITS - 75, "remaining should be 25");
+    }
+
+    #[test]
+    fn test_fulfill_bid_pays_royalty() {
+        // Royalty paid on the bid direction (consideration ERC1155 carries 2981).
+        let env = setup();
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let receiver: ContractAddress = ROYALTY_RECEIVER.try_into().unwrap();
+        let medialane = env.medialane.contract_address;
+
+        call_as(env.erc1155.contract_address, owner);
+        env.erc1155.set_royalty(receiver, 500); // 5%
+        call_as(env.erc1155.contract_address, owner);
+        env.erc1155.mint(env.fulfiller, TOKEN_ID.into(), UNITS.into(), array![].span());
+        call_as(env.erc1155.contract_address, env.fulfiller);
+        env.erc1155.approve(medialane, true);
+
+        let total: u256 = (PRICE * UNITS).into();
+        call_as(env.erc20.contract_address, owner);
+        env.erc20.mint_token(env.offerer, total);
+        call_as(env.erc20.contract_address, env.offerer);
+        env.erc20.approve_token(medialane, total);
+
+        let params = bid_params(@env);
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        call_as(medialane, env.fulfiller);
+        env.medialane.fulfill_order(hash, UNITS);
+
+        let royalty: u256 = total * 500 / 10000;
+        assert!(env.erc20.get_balance(receiver) == royalty, "creator royalty on bid");
+        assert!(env.erc20.get_balance(env.fulfiller) == total - royalty, "seller net");
+    }
+
+    #[test]
+    fn test_fulfill_zero_price() {
+        let env = setup();
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let medialane = env.medialane.contract_address;
+        call_as(env.erc1155.contract_address, owner);
+        env.erc1155.mint(env.offerer, TOKEN_ID.into(), UNITS.into(), array![].span());
+        call_as(env.erc1155.contract_address, env.offerer);
+        env.erc1155.approve(medialane, true);
+
+        let mut params = listing_params(@env);
+        params.consideration.amount = 0;
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        call_as(medialane, env.fulfiller);
+        env.medialane.fulfill_order(hash, UNITS);
+
+        assert!(
+            erc1155(@env).balance_of(env.fulfiller, TOKEN_ID.into()) == UNITS.into(),
+            "free transfer of units",
+        );
+        assert!(
+            env.medialane.get_order_details(hash).order_status == OrderStatus::Filled, "Filled",
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_fulfill_phantom_order_reverts() {
+        // Offerer never minted/approved the units → fulfilment reverts at delivery.
+        let env = setup();
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let medialane = env.medialane.contract_address;
+        let total: u256 = (PRICE * UNITS).into();
+        call_as(env.erc20.contract_address, owner);
+        env.erc20.mint_token(env.fulfiller, total);
+        call_as(env.erc20.contract_address, env.fulfiller);
+        env.erc20.approve_token(medialane, total);
+
+        let params = listing_params(@env);
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        call_as(medialane, env.fulfiller);
+        env.medialane.fulfill_order(hash, UNITS);
+    }
 }

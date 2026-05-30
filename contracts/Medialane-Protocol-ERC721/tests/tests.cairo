@@ -497,6 +497,89 @@ mod test {
     }
 
     #[test]
+    fn test_fulfill_bid_pays_royalty() {
+        // Royalty is paid on the bid direction too (seller = fulfiller).
+        let env = setup();
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let receiver: ContractAddress = ROYALTY_RECEIVER.try_into().unwrap();
+        let medialane = env.medialane.contract_address;
+
+        let roy = IMockERC721RoyaltyDispatcher {
+            contract_address: declare_and_deploy(
+                "MockERC721Royalty", array![owner.into(), receiver.into(), 500],
+            ),
+        };
+        // Seller (fulfiller) owns the NFT + approves.
+        call_as(roy.contract_address, owner);
+        roy.mint_token(env.fulfiller, TOKEN_ID.into());
+        call_as(roy.contract_address, env.fulfiller);
+        roy.approve_token(medialane, TOKEN_ID.into());
+        // Bidder (offerer) funds + approves the ERC20.
+        call_as(env.erc20.contract_address, owner);
+        env.erc20.mint_token(env.offerer, PRICE.into());
+        call_as(env.erc20.contract_address, env.offerer);
+        env.erc20.approve_token(medialane, PRICE.into());
+
+        let mut params = bid_params(@env);
+        params.consideration.token = roy.contract_address;
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        call_as(medialane, env.fulfiller);
+        env.medialane.fulfill_order(hash);
+
+        let royalty: u256 = 50000; // 5% of PRICE
+        assert!(env.erc20.get_balance(receiver) == royalty, "creator royalty on bid");
+        assert!(env.erc20.get_balance(env.fulfiller) == PRICE.into() - royalty, "seller net");
+    }
+
+    #[test]
+    fn test_fulfill_zero_price() {
+        // A free listing (price 0) transfers the NFT with no payment.
+        let env = setup();
+        let medialane = env.medialane.contract_address;
+        call_as(env.erc721.contract_address, OWNER.try_into().unwrap());
+        env.erc721.mint_token(env.offerer, TOKEN_ID.into());
+        call_as(env.erc721.contract_address, env.offerer);
+        env.erc721.approve_token(medialane, TOKEN_ID.into());
+
+        let mut params = listing_params(@env);
+        params.consideration.amount = 0;
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        call_as(medialane, env.fulfiller);
+        env.medialane.fulfill_order(hash);
+
+        assert!(env.erc721.get_owner(TOKEN_ID.into()) == env.fulfiller, "free transfer to buyer");
+        assert!(
+            env.medialane.get_order_details(hash).order_status == OrderStatus::Filled,
+            "should be Filled",
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_fulfill_phantom_order_reverts() {
+        // Order registered for an NFT the offerer neither owns nor approved →
+        // fulfilment reverts at NFT delivery (payment is rolled back atomically).
+        let env = setup();
+        let medialane = env.medialane.contract_address;
+        // Fund the buyer so payment succeeds and we reach the NFT transfer.
+        call_as(env.erc20.contract_address, OWNER.try_into().unwrap());
+        env.erc20.mint_token(env.fulfiller, PRICE.into());
+        call_as(env.erc20.contract_address, env.fulfiller);
+        env.erc20.approve_token(medialane, PRICE.into());
+
+        let params = listing_params(@env); // offerer never minted/approved the NFT
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        call_as(medialane, env.fulfiller);
+        env.medialane.fulfill_order(hash);
+    }
+
+    #[test]
     #[should_panic(expected: 'Reentrant call')]
     fn test_fulfill_reentrancy_blocked() {
         // A listing whose payment token reenters fulfill_order during settlement.

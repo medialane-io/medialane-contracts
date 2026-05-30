@@ -184,7 +184,15 @@ DROP_START_BLOCK=8341335
 
 ---
 
-### Medialane-Protocol (`contracts/Medialane-Protocol/`)
+### Medialane-Protocol-ERC721 (`contracts/Medialane-Protocol-ERC721/`)
+
+> **REDESIGN IN PROGRESS (2026-05-30, branch `feat/marketplace-721-redesign`, NOT yet audited/deployed).**
+> The contract is renamed **`Medialane721`** (SNIP-12 version **4**), package `0.4.0`, 30 snforge tests.
+> New signed order schema (`marketplace` binding, `royalty_max_bps`, `counter`; no `nonce`/`end_amount`),
+> EIP-2981 royalties, reentrancy guard + payment-before-delivery, self-fill guard, shape allow-list.
+> Declare with `--contract-name Medialane721`. Full record + deploy/migration plan:
+> `medialane-core/docs/audits/2026-05-30-marketplace-redesign-implementation.md`.
+> The addresses below are the **current live (pre-redesign)** deployment, to be superseded by a fresh class.
 
 Core marketplace contracts (order registration, fulfillment, cancellation). Audited and redeployed 2026-04-05.
 
@@ -220,6 +228,14 @@ PATH="..." sncast --profile medialane-mainnet deploy \
 ---
 
 ### Medialane-Protocol-ERC1155 (`contracts/Medialane-Protocol-ERC1155/`)
+
+> **REDESIGN IN PROGRESS (2026-05-30, branch `feat/marketplace-1155-redesign`, NOT yet audited/deployed).**
+> The contract is renamed **`Medialane1155`** (drop the `V2` suffix; SNIP-12 version **3**), package `0.4.0`, 33 snforge tests.
+> Same new order schema as the 721 venue (`marketplace` binding, `royalty_max_bps`, `counter`; no `nonce`/`end_amount`),
+> partial fills, **corrected EIP-2981 interface id** (the old hardcoded id never matched the OZ collection → royalties
+> were silently unpaid), reentrancy guard + payment-before-delivery. `fulfill_order(order_hash, quantity)`, no fulfiller sig.
+> Declare with `--contract-name Medialane1155`. Full record: `medialane-core/docs/audits/2026-05-30-marketplace-redesign-implementation.md`.
+> The addresses below are the **current live (pre-redesign)** deployment, to be superseded by a fresh class.
 
 ERC-1155 marketplace with partial fills. Redesigned and deployed 2026-04-20.
 

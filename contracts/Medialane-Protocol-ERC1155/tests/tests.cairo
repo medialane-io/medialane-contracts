@@ -6,6 +6,9 @@ mod test {
     use medialane_erc1155::core::types::*;
     use medialane_erc1155::mocks::erc1155::{IMockERC1155Dispatcher, IMockERC1155DispatcherTrait};
     use medialane_erc1155::mocks::erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
+    use medialane_erc1155::mocks::malicious::{
+        IMaliciousERC20Dispatcher, IMaliciousERC20DispatcherTrait,
+    };
     use openzeppelin_token::erc1155::interface::{IERC1155Dispatcher, IERC1155DispatcherTrait};
     use snforge_std::signature::KeyPairTrait;
     use snforge_std::signature::stark_curve::{StarkCurveKeyPairImpl, StarkCurveSignerImpl};
@@ -484,5 +487,36 @@ mod test {
         env.medialane.increment_counter();
         let params = listing_params(@env); // counter 0, now stale
         env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
+    #[should_panic(expected: 'Reentrant call')]
+    fn test_fulfill_reentrancy_blocked() {
+        // A listing whose payment token reenters fulfill_order during settlement.
+        // The guard must abort the reentrant call.
+        let env = setup();
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let medialane = env.medialane.contract_address;
+
+        let malicious = IMaliciousERC20Dispatcher {
+            contract_address: declare_and_deploy("MaliciousERC20", array![]),
+        };
+
+        // Offerer owns + approves the units (shape/registration are valid).
+        call_as(env.erc1155.contract_address, owner);
+        env.erc1155.mint(env.offerer, TOKEN_ID.into(), UNITS.into(), array![].span());
+        call_as(env.erc1155.contract_address, env.offerer);
+        env.erc1155.approve(medialane, true);
+
+        // Consideration token = the malicious reentrant ERC20.
+        let mut params = listing_params(@env);
+        params.consideration.token = malicious.contract_address;
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        malicious.set_attack(medialane, hash, UNITS);
+
+        call_as(medialane, env.fulfiller);
+        env.medialane.fulfill_order(hash, UNITS); // _pay -> malicious.transfer_from -> reenter
     }
 }

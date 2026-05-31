@@ -1,3 +1,17 @@
+/// Medialane1155 — immutable ERC1155 marketplace venue (Seaport-style signed orders,
+/// with partial fills and per-unit pricing).
+///
+/// Safety model — every check is on-chain and falls in exactly one bucket:
+///   1. Statically determinable from the signed order → validated at registration,
+///      fail-fast: offerer != 0, marketplace == self, counter, royalty_max_bps <= 10000,
+///      trade shape (ERC1155 <-> {NATIVE, ERC20}, both directions, NFT contract != the
+///      resolved payment token), recipient != 0, time window, offerer signature.
+///   2. Mutable on-chain state (ownership, approval, balance, live EIP-2981) → not
+///      pre-simulated; enforced by atomic revert at fill. Settlement pulls payment
+///      before delivering the units, under a reentrancy guard with CEI. Per-unit
+///      pricing (sale = price_per_unit * quantity) is overflow-checked.
+///
+/// No owner/admin/upgrade/pause. A future fix is a fresh declare + deploy.
 #[starknet::contract]
 pub mod Medialane1155 {
     use openzeppelin_account::interface::{ISRC6Dispatcher, ISRC6DispatcherTrait};
@@ -63,6 +77,11 @@ pub mod Medialane1155 {
             assert(!offerer.is_zero(), errors::INVALID_OFFERER);
             assert(params.marketplace == get_contract_address(), errors::WRONG_MARKETPLACE);
             assert(params.counter == self.cancel_counter.read(offerer), errors::INVALID_COUNTER);
+            // royalty_max_bps is a percentage in basis points; bound it to [0, 10000]
+            // so the cap math at fill cannot overflow and the invariant is explicit.
+            assert(
+                felt_to_u256(params.royalty_max_bps) <= 10000_u256, errors::ROYALTY_BPS_TOO_HIGH,
+            );
 
             // Shape: ERC1155 <-> {NATIVE, ERC20}, both directions. Returns the
             // ERC1155 quantity, which seeds remaining_amount for partial fills.
@@ -214,6 +233,10 @@ pub mod Medialane1155 {
                             consideration.token,
                             consideration.identifier_or_criteria,
                         );
+                    // The ERC1155 contract must not double as the payment token
+                    // (resolved for NATIVE), or settlement is an incoherent trade.
+                    let pay = self._payment_token(consideration.item_type, consideration.token);
+                    assert(offer.token != pay, errors::PAYMENT_TOKEN_IS_NFT);
                     offer.amount
                 },
                 // Bid: payment for ERC1155.
@@ -227,6 +250,10 @@ pub mod Medialane1155 {
                         _ => panic_with_felt252(errors::UNSUPPORTED_SHAPE),
                     }
                     self._validate_erc1155_item(consideration.token, consideration.amount);
+                    // The ERC1155 contract must not double as the payment token
+                    // (resolved for NATIVE), or settlement is an incoherent trade.
+                    let pay = self._payment_token(offer.item_type, offer.token);
+                    assert(consideration.token != pay, errors::PAYMENT_TOKEN_IS_NFT);
                     consideration.amount
                 },
             }

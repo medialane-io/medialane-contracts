@@ -20,6 +20,8 @@ pub mod errors {
     pub const INVALID_COUNTER: felt252 = 'Invalid counter';
     pub const SELF_FILL: felt252 = 'Cannot fill own order';
     pub const UNSUPPORTED_SHAPE: felt252 = 'Unsupported trade shape';
+    pub const PAYMENT_TOKEN_IS_NFT: felt252 = 'Payment token is the NFT';
+    pub const ROYALTY_BPS_TOO_HIGH: felt252 = 'Royalty bound too high';
     pub const ROYALTY_EXCEEDS_SALE: felt252 = 'Royalty exceeds sale';
     pub const ROYALTY_TRANSFER_FAILED: felt252 = 'Royalty transfer failed';
     pub const REENTRANT_CALL: felt252 = 'Reentrant call';

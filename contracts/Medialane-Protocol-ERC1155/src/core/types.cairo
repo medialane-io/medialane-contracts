@@ -41,6 +41,9 @@ impl Felt252TryIntoItemType of TryInto<felt252, ItemType> {
 /// A single item. For an ERC1155 leg, `amount` is the quantity of units. For a
 /// payment leg, `amount` is the price PER UNIT (sale = price_per_unit * quantity).
 /// No end_amount — fixed price only (audit F4).
+///
+/// `identifier_or_criteria` carries the ERC1155 `token_id`. Because the order is
+/// SNIP-12 signed, it is a `felt252`: token IDs must fit in a felt (< 2^252).
 #[derive(Debug, Drop, Copy, Serde, PartialEq, Hash, starknet::Store)]
 pub struct OfferItem {
     pub item_type: felt252,

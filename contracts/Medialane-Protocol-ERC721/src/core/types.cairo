@@ -42,6 +42,10 @@ impl Felt252TryIntoItemType of TryInto<felt252, ItemType> {
 /// A single fixed-price item. `amount` is the quantity (1 for ERC721, the wei
 /// amount for NATIVE/ERC20). There is no separate end_amount — fixed price only
 /// (audit F4: Dutch interpolation lives in the future auction venue).
+///
+/// `identifier_or_criteria` carries the ERC721 `token_id`. Because the order is
+/// SNIP-12 signed, it is a `felt252`: token IDs must fit in a felt (< 2^252).
+/// Collections using IDs at/above 2^252 cannot be traded on this venue.
 #[derive(Debug, Drop, Copy, Serde, PartialEq, Hash, starknet::Store)]
 pub struct OfferItem {
     pub item_type: felt252,

@@ -473,6 +473,31 @@ mod test {
         env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
     }
 
+    #[test]
+    #[should_panic(expected: 'Royalty bound too high')]
+    fn test_register_rejects_royalty_bps_above_max() {
+        // royalty_max_bps is a percentage in bps; > 10000 (100%) is nonsensical and
+        // would overflow the cap math at fill. Reject it at registration.
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.royalty_max_bps = 10001;
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
+    fn test_register_allows_royalty_bps_at_max() {
+        // The boundary value 10000 (100%) is valid.
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.royalty_max_bps = 10000;
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+        assert!(
+            env.medialane.get_order_details(hash).order_status == OrderStatus::Created,
+            "bps == 10000 should register",
+        );
+    }
+
     // --- time window ---
 
     #[test]

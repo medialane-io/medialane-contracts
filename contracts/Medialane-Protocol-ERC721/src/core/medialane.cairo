@@ -68,6 +68,11 @@ pub mod Medialane721 {
             assert(params.marketplace == get_contract_address(), errors::WRONG_MARKETPLACE);
             // F2: order valid only under the offerer's current bulk-cancel epoch.
             assert(params.counter == self.cancel_counter.read(offerer), errors::INVALID_COUNTER);
+            // royalty_max_bps is a percentage in basis points; bound it to [0, 10000]
+            // so the cap math at fill cannot overflow and the invariant is explicit.
+            assert(
+                felt_to_u256(params.royalty_max_bps) <= 10000_u256, errors::ROYALTY_BPS_TOO_HIGH,
+            );
 
             // F6/S3: only ERC721 ↔ {NATIVE, ERC20}, both directions.
             self._validate_order_shape(params.offer, params.consideration);

@@ -1,13 +1,13 @@
 #[cfg(test)]
 mod test {
-    use medialane_protocol::core::interface::{IMedialaneDispatcher, IMedialaneDispatcherTrait};
-    use medialane_protocol::core::types::*;
-    use medialane_protocol::mocks::erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
-    use medialane_protocol::mocks::erc721::{IMockERC721Dispatcher, IMockERC721DispatcherTrait};
-    use medialane_protocol::mocks::erc721_royalty::{
+    use medialane_marketplace_erc721::core::interface::{IMedialaneDispatcher, IMedialaneDispatcherTrait};
+    use medialane_marketplace_erc721::core::types::*;
+    use medialane_marketplace_erc721::mocks::erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
+    use medialane_marketplace_erc721::mocks::erc721::{IMockERC721Dispatcher, IMockERC721DispatcherTrait};
+    use medialane_marketplace_erc721::mocks::erc721_royalty::{
         IMockERC721RoyaltyDispatcher, IMockERC721RoyaltyDispatcherTrait,
     };
-    use medialane_protocol::mocks::malicious::{
+    use medialane_marketplace_erc721::mocks::malicious::{
         IMaliciousERC20Dispatcher, IMaliciousERC20DispatcherTrait,
     };
     use snforge_std::signature::KeyPairTrait;

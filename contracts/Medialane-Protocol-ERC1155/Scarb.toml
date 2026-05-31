@@ -1,5 +1,5 @@
 [package]
-name = "medialane_erc1155"
+name = "medialane_marketplace_erc1155"
 version = "0.4.0"
 edition = "2024_07"
 

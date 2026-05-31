@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod test {
-    use medialane_erc1155::core::interface::{
+    use medialane_marketplace_erc1155::core::interface::{
         IMedialane1155Dispatcher, IMedialane1155DispatcherTrait,
     };
-    use medialane_erc1155::core::types::*;
-    use medialane_erc1155::mocks::erc1155::{IMockERC1155Dispatcher, IMockERC1155DispatcherTrait};
-    use medialane_erc1155::mocks::erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
-    use medialane_erc1155::mocks::malicious::{
+    use medialane_marketplace_erc1155::core::types::*;
+    use medialane_marketplace_erc1155::mocks::erc1155::{IMockERC1155Dispatcher, IMockERC1155DispatcherTrait};
+    use medialane_marketplace_erc1155::mocks::erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
+    use medialane_marketplace_erc1155::mocks::malicious::{
         IMaliciousERC20Dispatcher, IMaliciousERC20DispatcherTrait,
     };
     use openzeppelin_token::erc1155::interface::{IERC1155Dispatcher, IERC1155DispatcherTrait};

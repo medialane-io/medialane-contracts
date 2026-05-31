@@ -2,7 +2,7 @@
 version = 1
 
 [[package]]
-name = "medialane_protocol"
+name = "medialane_marketplace_erc721"
 version = "0.4.0"
 dependencies = [
  "openzeppelin_access",

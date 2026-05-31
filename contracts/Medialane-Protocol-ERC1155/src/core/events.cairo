@@ -30,3 +30,10 @@ pub struct OrderCancelled {
     #[key]
     pub offerer: ContractAddress,
 }
+
+#[derive(Drop, starknet::Event)]
+pub struct CounterIncremented {
+    #[key]
+    pub offerer: ContractAddress,
+    pub new_counter: felt252,
+}

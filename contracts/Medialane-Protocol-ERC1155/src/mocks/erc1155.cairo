@@ -31,8 +31,9 @@ pub mod MockERC1155 {
     impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
     impl SRC5InternalImpl = SRC5Component::InternalImpl<ContractState>;
 
-    // ERC-2981 interface ID
-    const IERC2981_ID: felt252 = 0x2d3414e45a8700c29f119a54b9f11dca0e29e06ddcb214018fc37340e165d6b;
+    // ERC-2981 interface ID — imported from OZ (the old hardcoded 0x…e165d6b did
+    // not match the OZ id, which broke royalty detection on real collections).
+    use openzeppelin_token::common::erc2981::interface::IERC2981_ID;
     const FEE_DENOMINATOR: u256 = 10000;
 
     #[storage]

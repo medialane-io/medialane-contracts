@@ -2,13 +2,20 @@ use starknet::ContractAddress;
 use crate::core::types::*;
 
 #[starknet::interface]
-pub trait IMedialane1155V2<TState> {
+pub trait IMedialane1155<TState> {
     fn register_order(ref self: TState, order: Order);
-    fn fulfill_order(ref self: TState, fulfillment_request: FulfillmentRequest);
+    /// Fulfil `quantity` units of an open order. Caller IS the fulfiller — no
+    /// fulfiller signature (audit F3). Partial fills allowed (1 <= quantity <= remaining).
+    fn fulfill_order(ref self: TState, order_hash: felt252, quantity: felt252);
     fn cancel_order(ref self: TState, cancel_request: CancelRequest);
+    fn increment_counter(ref self: TState);
     fn get_order_details(self: @TState, order_hash: felt252) -> OrderDetails;
     fn get_order_hash(
         self: @TState, parameters: OrderParameters, signer: ContractAddress,
     ) -> felt252;
+    fn get_cancellation_hash(
+        self: @TState, cancellation: OrderCancellation, signer: ContractAddress,
+    ) -> felt252;
+    fn get_counter(self: @TState, offerer: ContractAddress) -> felt252;
     fn get_native_token_address(self: @TState) -> ContractAddress;
 }

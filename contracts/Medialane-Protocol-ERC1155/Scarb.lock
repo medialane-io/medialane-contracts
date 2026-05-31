@@ -3,7 +3,7 @@ version = 1
 
 [[package]]
 name = "medialane_erc1155"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "openzeppelin_access",
  "openzeppelin_account",

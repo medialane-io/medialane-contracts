@@ -10,6 +10,7 @@ pub mod errors {
     pub const INVALID_ITEM_TYPE: felt252 = 'Invalid item type';
     pub const CALLER_NOT_OFFERER: felt252 = 'Caller not offerer';
     pub const INVALID_OFFERER: felt252 = 'Offerer cannot be zero';
+    pub const INVALID_NATIVE_TOKEN: felt252 = 'Native token cannot be zero';
     pub const INVALID_RECIPIENT: felt252 = 'Recipient cannot be zero';
     pub const INVALID_AMOUNT: felt252 = 'Invalid amount';
     pub const INVALID_TOKEN_ADDRESS: felt252 = 'Token address cannot be zero';

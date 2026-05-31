@@ -35,6 +35,9 @@ pub mod Medialane1155 {
     use crate::core::types::*;
     use crate::core::utils::{felt_to_u256, felt_to_u64};
 
+    /// Basis-points denominator: royalty bps are a fraction of 10_000 (100%).
+    const BPS_DENOMINATOR: u256 = 10000;
+
     #[storage]
     struct Storage {
         orders: Map<felt252, OrderDetails>,
@@ -64,7 +67,7 @@ pub mod Medialane1155 {
 
     #[constructor]
     fn constructor(ref self: ContractState, native_token_address: ContractAddress) {
-        assert!(!native_token_address.is_zero(), "Native token cannot be zero");
+        assert(!native_token_address.is_zero(), errors::INVALID_NATIVE_TOKEN);
         self.native_token_address.write(native_token_address);
     }
 
@@ -80,7 +83,8 @@ pub mod Medialane1155 {
             // royalty_max_bps is a percentage in basis points; bound it to [0, 10000]
             // so the cap math at fill cannot overflow and the invariant is explicit.
             assert(
-                felt_to_u256(params.royalty_max_bps) <= 10000_u256, errors::ROYALTY_BPS_TOO_HIGH,
+                felt_to_u256(params.royalty_max_bps) <= BPS_DENOMINATOR,
+                errors::ROYALTY_BPS_TOO_HIGH,
             );
 
             // Shape: ERC1155 <-> {NATIVE, ERC20}, both directions. Returns the
@@ -504,7 +508,7 @@ pub mod Medialane1155 {
                 return (zero, 0);
             }
 
-            let max_amount = (sale_amount * felt_to_u256(royalty_max_bps)) / 10000_u256;
+            let max_amount = (sale_amount * felt_to_u256(royalty_max_bps)) / BPS_DENOMINATOR;
             let capped = if raw_amount > max_amount {
                 max_amount
             } else {

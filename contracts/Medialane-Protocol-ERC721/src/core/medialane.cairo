@@ -1,34 +1,50 @@
+/// Medialane721 — immutable ERC721 marketplace venue (Seaport-style signed orders).
+///
+/// Safety model — every check is on-chain and falls in exactly one bucket:
+///   1. Statically determinable from the signed order → validated at registration,
+///      fail-fast: offerer != 0, marketplace == self, counter, royalty_max_bps <= 10000,
+///      trade shape (ERC721 <-> {NATIVE, ERC20}, both directions, NFT contract != the
+///      resolved payment token), recipient != 0, time window, offerer signature.
+///   2. Mutable on-chain state (ownership, approval, balance, live EIP-2981) → not
+///      pre-simulated; enforced by atomic revert at fill. Settlement pulls payment
+///      before delivering the NFT, under a reentrancy guard with CEI.
+///
+/// No owner/admin/upgrade/pause. A future fix is a fresh declare + deploy.
 #[starknet::contract]
-pub mod Medialane {
+pub mod Medialane721 {
     use openzeppelin_account::interface::{ISRC6Dispatcher, ISRC6DispatcherTrait};
-    use openzeppelin_token::erc1155::interface::{IERC1155Dispatcher, IERC1155DispatcherTrait};
     use openzeppelin_token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
+    use openzeppelin_token::common::erc2981::interface::IERC2981_ID;
     use openzeppelin_token::erc721::interface::{IERC721Dispatcher, IERC721DispatcherTrait};
-    use openzeppelin_utils::cryptography::nonces::NoncesComponent;
     use openzeppelin_utils::snip12::{OffchainMessageHash, SNIP12Metadata};
+    use starknet::syscalls::call_contract_syscall;
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
     };
-    use starknet::{ContractAddress, get_block_timestamp, get_caller_address};
+    use starknet::{
+        ContractAddress, get_block_timestamp, get_caller_address, get_contract_address,
+    };
     use core::num::traits::Zero;
-    use crate::core::interface::*;
+    use core::panic_with_felt252;
+    use crate::core::errors::errors;
+    use crate::core::interface::IMedialane;
     use crate::core::types::*;
-    use crate::core::utils::*;
+    use crate::core::events::*;
+    use crate::core::utils::{felt_to_u256, felt_to_u64};
 
-    component!(path: NoncesComponent, storage: nonces, event: NoncesEvent);
-
-    #[abi(embed_v0)]
-    impl NoncesImpl = NoncesComponent::NoncesImpl<ContractState>;
-    impl NoncesInternalImpl = NoncesComponent::InternalImpl<ContractState>;
+    /// Basis-points denominator: royalty bps are a fraction of 10_000 (100%).
+    const BPS_DENOMINATOR: u256 = 10000;
 
     #[storage]
     struct Storage {
         orders: Map<felt252, OrderDetails>,
-        // Immutable after construction — set once, never changed (no admin key).
+        // Immutable after construction.
         native_token_address: ContractAddress,
-        #[substorage(v0)]
-        nonces: NoncesComponent::Storage,
+        // Per-offerer bulk-cancel epoch.
+        cancel_counter: Map<ContractAddress, felt252>,
+        // Minimal reentrancy guard (dependency-free; paired with payment-before-delivery).
+        entered: bool,
     }
 
     #[event]
@@ -37,154 +53,124 @@ pub mod Medialane {
         OrderCreated: OrderCreated,
         OrderFulfilled: OrderFulfilled,
         OrderCancelled: OrderCancelled,
-        #[flat]
-        NoncesEvent: NoncesComponent::Event,
+        CounterIncremented: CounterIncremented,
     }
-
-    use crate::core::events::*;
 
     impl SNIP12MetadataImpl of SNIP12Metadata {
         fn name() -> felt252 {
             'Medialane'
         }
+        /// Bumped on every deploy (audit S1). v4 = first redesigned ERC721 venue.
         fn version() -> felt252 {
-            1
+            4
         }
     }
 
     #[constructor]
     fn constructor(ref self: ContractState, native_token_address: ContractAddress) {
-        assert!(!native_token_address.is_zero(), "Native token cannot be zero");
+        assert(!native_token_address.is_zero(), errors::INVALID_NATIVE_TOKEN);
         self.native_token_address.write(native_token_address);
     }
 
     #[abi(embed_v0)]
-    impl MedialaneImpl of IMedialane<ContractState> {
+    impl Medialane721Impl of IMedialane<ContractState> {
         fn register_order(ref self: ContractState, order: Order) {
-            let order_parameters = order.parameters;
-            let signature = order.signature;
-            let offerer = order_parameters.offerer;
+            let params = order.parameters;
+            let offerer = params.offerer;
 
-            assert!(!offerer.is_zero(), "Offerer cannot be zero");
-
-            let offer_type: Option<ItemType> = order_parameters.offer.item_type.try_into();
-            assert!(offer_type.is_some(), "Invalid item type");
-            let consideration_type: Option<ItemType> = order_parameters.consideration.item_type
-                .try_into();
-            assert!(consideration_type.is_some(), "Invalid item type");
-
-            // Fixed price only — Dutch auction interpolation is not supported.
-            assert!(
-                order_parameters.offer.start_amount == order_parameters.offer.end_amount,
-                "End amount must equal start",
-            );
-            assert!(
-                order_parameters.consideration.start_amount == order_parameters
-                    .consideration
-                    .end_amount,
-                "End amount must equal start",
+            assert(!offerer.is_zero(), errors::INVALID_OFFERER);
+            // S1: the order is bound to this exact deployment.
+            assert(params.marketplace == get_contract_address(), errors::WRONG_MARKETPLACE);
+            // F2: order valid only under the offerer's current bulk-cancel epoch.
+            assert(params.counter == self.cancel_counter.read(offerer), errors::INVALID_COUNTER);
+            // royalty_max_bps is a percentage in basis points; bound it to [0, 10000]
+            // so the cap math at fill cannot overflow and the invariant is explicit.
+            assert(
+                felt_to_u256(params.royalty_max_bps) <= BPS_DENOMINATOR,
+                errors::ROYALTY_BPS_TOO_HIGH,
             );
 
-            let order_hash = order_parameters.get_message_hash(offerer);
+            // F6/S3: only ERC721 ↔ {NATIVE, ERC20}, both directions.
+            self._validate_order_shape(params.offer, params.consideration);
 
-            // Cheap state checks before the expensive SRC-6 external call.
-            self._assert_order_status_none(order_hash);
-
-            let start_time = felt_to_u64(order_parameters.start_time);
-            let end_time = felt_to_u64(order_parameters.end_time);
+            let start_time = felt_to_u64(params.start_time);
+            let end_time = felt_to_u64(params.end_time);
             self._validate_registration_window(start_time, end_time);
-            self._validate_item(order_parameters.offer, offer_type.unwrap());
-            self._validate_consideration(order_parameters.consideration, consideration_type.unwrap());
 
-            self._validate_hash_signature(order_hash, offerer, signature);
+            let order_hash = params.get_message_hash(offerer);
+            self._assert_status_none(order_hash);
+            self._validate_signature(order_hash, offerer, order.signature);
 
-            self.nonces.use_checked_nonce(offerer, order_parameters.nonce);
-
-            let order_details = OrderDetails {
-                offerer: order_parameters.offerer,
-                offer: order_parameters.offer,
-                consideration: order_parameters.consideration,
-                start_time: start_time,
-                end_time: end_time,
+            let details = OrderDetails {
+                offerer,
+                offer: params.offer,
+                consideration: params.consideration,
+                royalty_max_bps: params.royalty_max_bps,
+                start_time,
+                end_time,
                 order_status: OrderStatus::Created,
-                fulfiller: Option::None,
             };
-
-            self.orders.write(order_hash, order_details);
-
-            self
-                .emit(
-                    Event::OrderCreated(
-                        OrderCreated { order_hash: order_hash, offerer: order_parameters.offerer },
-                    ),
-                );
+            self.orders.write(order_hash, details);
+            self.emit(Event::OrderCreated(OrderCreated { order_hash, offerer }));
         }
 
-        fn fulfill_order(ref self: ContractState, fulfillment_request: FulfillmentRequest) {
-            let fulfillment_intent = fulfillment_request.fulfillment;
-            let signature = fulfillment_request.signature;
-            let order_hash = fulfillment_intent.order_hash;
+        fn fulfill_order(ref self: ContractState, order_hash: felt252) {
+            self._reentrancy_start();
 
-            let mut order_details = self._assert_order_status_created(order_hash);
+            let mut details = self._assert_status_created(order_hash);
+            let fulfiller = get_caller_address();
+            // F5: no self-dealing / wash trading.
+            assert(fulfiller != details.offerer, errors::SELF_FILL);
+            self._validate_active_order(details.start_time, details.end_time);
 
-            let fulfiller = fulfillment_intent.fulfiller;
+            // CEI: persist the terminal state before any external call.
+            details.order_status = OrderStatus::Filled;
+            self.orders.write(order_hash, details);
 
-            assert!(!fulfiller.is_zero(), "Fulfiller cannot be zero");
-
-            // Caller must be the fulfiller — prevents front-running via mempool replay.
-            assert!(get_caller_address() == fulfiller, "Caller not fulfiller");
-
-            let fulfillment_hash = fulfillment_intent.get_message_hash(fulfiller);
-            self._validate_hash_signature(fulfillment_hash, fulfiller, signature);
-
-            self._validate_active_order(order_details.start_time, order_details.end_time);
-
-            self.nonces.use_checked_nonce(fulfiller, fulfillment_intent.nonce);
-
-            // CEI: mark filled before external token transfers.
-            order_details.order_status = OrderStatus::Filled;
-            order_details.fulfiller = Option::Some(fulfiller);
-            self.orders.write(order_hash, order_details);
-
-            self._execute_transfers(order_details, fulfiller);
+            let (sale_amount, royalty_receiver, royalty_amount) = self
+                ._execute_transfers(details, fulfiller);
 
             self
                 .emit(
                     Event::OrderFulfilled(
                         OrderFulfilled {
-                            order_hash: order_hash,
-                            offerer: order_details.offerer,
-                            fulfiller: fulfiller,
+                            order_hash,
+                            offerer: details.offerer,
+                            fulfiller,
+                            sale_amount,
+                            royalty_receiver,
+                            royalty_amount,
                         },
                     ),
                 );
+
+            self._reentrancy_end();
         }
 
         fn cancel_order(ref self: ContractState, cancel_request: CancelRequest) {
-            let cancelation_intent = cancel_request.cancelation;
-            let signature = cancel_request.signature;
+            let cancellation = cancel_request.cancelation;
+            let offerer = cancellation.offerer;
+            let order_hash = cancellation.order_hash;
 
-            let offerer = cancelation_intent.offerer;
-            let order_hash = cancelation_intent.order_hash;
+            let mut details = self._assert_status_created(order_hash);
+            assert(offerer == details.offerer, errors::CALLER_NOT_OFFERER);
 
-            let mut order_details = self._assert_order_status_created(order_hash);
+            let cancel_hash = cancellation.get_message_hash(offerer);
+            self._validate_signature(cancel_hash, offerer, cancel_request.signature);
 
-            // Only the original offerer may cancel.
-            assert!(offerer == order_details.offerer, "Caller not offerer");
+            details.order_status = OrderStatus::Cancelled;
+            self.orders.write(order_hash, details);
+            self.emit(Event::OrderCancelled(OrderCancelled { order_hash, offerer }));
+        }
 
-            let cancelation_hash = cancelation_intent.get_message_hash(offerer);
-            self._validate_hash_signature(cancelation_hash, offerer, signature);
-
-            order_details.order_status = OrderStatus::Cancelled;
-
-            self.nonces.use_checked_nonce(offerer, cancelation_intent.nonce);
-
-            self.orders.write(order_hash, order_details);
-
+        fn increment_counter(ref self: ContractState) {
+            let caller = get_caller_address();
+            let new_counter = self.cancel_counter.read(caller) + 1;
+            self.cancel_counter.write(caller, new_counter);
             self
                 .emit(
-                    Event::OrderCancelled(
-                        OrderCancelled { order_hash: order_hash, offerer: order_details.offerer },
+                    Event::CounterIncremented(
+                        CounterIncremented { offerer: caller, new_counter },
                     ),
                 );
         }
@@ -199,6 +185,16 @@ pub mod Medialane {
             parameters.get_message_hash(signer)
         }
 
+        fn get_cancellation_hash(
+            self: @ContractState, cancellation: OrderCancellation, signer: ContractAddress,
+        ) -> felt252 {
+            cancellation.get_message_hash(signer)
+        }
+
+        fn get_counter(self: @ContractState, offerer: ContractAddress) -> felt252 {
+            self.cancel_counter.read(offerer)
+        }
+
         fn get_native_token_address(self: @ContractState) -> ContractAddress {
             self.native_token_address.read()
         }
@@ -206,175 +202,306 @@ pub mod Medialane {
 
     #[generate_trait]
     impl InternalFunctions of InternalFunctionsTrait {
-        /// Registration is allowed any time before expiry, but active windows must still be valid.
-        fn _validate_registration_window(self: @ContractState, start_time: u64, end_time: u64) {
-            let now = get_block_timestamp();
-            if end_time != 0 {
-                assert!(start_time < end_time, "Invalid time window");
-                assert!(now < end_time, "Order expired");
+        /// Enforces the venue's trade shape: exactly one side is the ERC721 and
+        /// the other is a payment (NATIVE or ERC20). Both directions — a listing
+        /// (offer NFT) and a bid (offer payment) — are allowed.
+        fn _validate_order_shape(
+            self: @ContractState, offer: OfferItem, consideration: ConsiderationItem,
+        ) {
+            let offer_type: Option<ItemType> = offer.item_type.try_into();
+            assert(offer_type.is_some(), errors::INVALID_ITEM_TYPE);
+            let consideration_type: Option<ItemType> = consideration.item_type.try_into();
+            assert(consideration_type.is_some(), errors::INVALID_ITEM_TYPE);
+
+            // The consideration always names a recipient.
+            assert(!consideration.recipient.is_zero(), errors::INVALID_RECIPIENT);
+
+            match offer_type.unwrap() {
+                // Listing: NFT for payment.
+                ItemType::ERC721 => {
+                    self._validate_erc721_item(offer.token, offer.amount);
+                    self
+                        ._validate_payment_item(
+                            consideration_type.unwrap(),
+                            consideration.token,
+                            consideration.identifier_or_criteria,
+                        );
+                    // The NFT contract must not double as the payment token, or the
+                    // transfer_from calls collide at fill. Compare against the
+                    // resolved payment token (native STRK for NATIVE).
+                    let pay = self._payment_token(consideration.item_type, consideration.token);
+                    assert(offer.token != pay, errors::PAYMENT_TOKEN_IS_NFT);
+                },
+                // Bid: payment for NFT.
+                ItemType::NATIVE | ItemType::ERC20 => {
+                    self
+                        ._validate_payment_item(
+                            offer_type.unwrap(), offer.token, offer.identifier_or_criteria,
+                        );
+                    match consideration_type.unwrap() {
+                        ItemType::ERC721 => {},
+                        _ => panic_with_felt252(errors::UNSUPPORTED_SHAPE),
+                    }
+                    self
+                        ._validate_erc721_item(
+                            consideration.token, consideration.amount,
+                        );
+                    // The NFT contract must not double as the payment token (resolved
+                    // for NATIVE), or the transfer_from calls collide at fill.
+                    let pay = self._payment_token(offer.item_type, offer.token);
+                    assert(consideration.token != pay, errors::PAYMENT_TOKEN_IS_NFT);
+                },
             }
         }
 
-        /// Asserts current timestamp is within the active window (used during fulfillment).
+        fn _validate_erc721_item(self: @ContractState, token: ContractAddress, amount: felt252) {
+            assert(!token.is_zero(), errors::INVALID_TOKEN_ADDRESS);
+            assert(amount == 1, errors::INVALID_AMOUNT);
+        }
+
+        /// Validates a payment leg. `amount` may be zero (F9: free orders allowed).
+        fn _validate_payment_item(
+            self: @ContractState,
+            item_type: ItemType,
+            token: ContractAddress,
+            identifier: felt252,
+        ) {
+            match item_type {
+                ItemType::NATIVE => {
+                    assert(token.is_zero(), errors::NONZERO_NATIVE_TOKEN);
+                    assert(identifier == 0, errors::INVALID_IDENTIFIER);
+                },
+                ItemType::ERC20 => {
+                    assert(!token.is_zero(), errors::INVALID_TOKEN_ADDRESS);
+                    assert(identifier == 0, errors::INVALID_IDENTIFIER);
+                },
+                ItemType::ERC721 => panic_with_felt252(errors::UNSUPPORTED_SHAPE),
+            }
+        }
+
+        /// Registration is allowed any time before expiry; active windows must be valid.
+        fn _validate_registration_window(self: @ContractState, start_time: u64, end_time: u64) {
+            if end_time != 0 {
+                assert(start_time < end_time, errors::INVALID_TIME_WINDOW);
+                assert(get_block_timestamp() < end_time, errors::ORDER_EXPIRED);
+            }
+        }
+
+        /// Asserts the current time is within the order's active window.
         fn _validate_active_order(self: @ContractState, start_time: u64, end_time: u64) {
             let now = get_block_timestamp();
-            assert!(now >= start_time, "Order not yet valid");
+            assert(now >= start_time, errors::ORDER_NOT_YET_VALID);
             if end_time != 0 {
-                assert!(now < end_time, "Order expired");
+                assert(now < end_time, errors::ORDER_EXPIRED);
             }
         }
 
-        /// Reads the order and asserts it has not been registered before (status == None).
-        fn _assert_order_status_none(self: @ContractState, order_hash: felt252) {
-            let order_details = self.orders.read(order_hash);
-            match order_details.order_status {
-                OrderStatus::None => {},
-                OrderStatus::Created => panic!("Order already created"),
-                OrderStatus::Filled => panic!("Order already filled"),
-                OrderStatus::Cancelled => panic!("Order cancelled"),
+        fn _reentrancy_start(ref self: ContractState) {
+            assert(!self.entered.read(), errors::REENTRANT_CALL);
+            self.entered.write(true);
+        }
+
+        fn _reentrancy_end(ref self: ContractState) {
+            self.entered.write(false);
+        }
+
+        /// Settles an order: pulls payment from the payer (royalty first, then the
+        /// seller's remainder) and only THEN delivers the NFT (payment-before-delivery).
+        /// Returns (sale_amount, royalty_receiver, royalty_amount) for the event.
+        fn _execute_transfers(
+            self: @ContractState, details: OrderDetails, fulfiller: ContractAddress,
+        ) -> (u256, ContractAddress, u256) {
+            let offer_type: ItemType = details.offer.item_type.try_into().unwrap();
+            match offer_type {
+                // Listing: buyer (fulfiller) pays; NFT goes offerer -> fulfiller.
+                ItemType::ERC721 => {
+                    let nft = details.offer.token;
+                    let token_id = felt_to_u256(details.offer.identifier_or_criteria);
+                    let sale_amount = felt_to_u256(details.consideration.amount);
+                    let (royalty_receiver, royalty_amount) = self
+                        ._pay(
+                            details.consideration.item_type,
+                            details.consideration.token,
+                            fulfiller,
+                            details.consideration.recipient,
+                            nft,
+                            token_id,
+                            sale_amount,
+                            details.royalty_max_bps,
+                        );
+                    IERC721Dispatcher { contract_address: nft }
+                        .transfer_from(details.offerer, fulfiller, token_id);
+                    (sale_amount, royalty_receiver, royalty_amount)
+                },
+                // Bid: bidder (offerer) pays; NFT goes fulfiller -> bidder (recipient).
+                ItemType::NATIVE | ItemType::ERC20 => {
+                    let nft = details.consideration.token;
+                    let token_id = felt_to_u256(details.consideration.identifier_or_criteria);
+                    let sale_amount = felt_to_u256(details.offer.amount);
+                    let (royalty_receiver, royalty_amount) = self
+                        ._pay(
+                            details.offer.item_type,
+                            details.offer.token,
+                            details.offerer,
+                            fulfiller,
+                            nft,
+                            token_id,
+                            sale_amount,
+                            details.royalty_max_bps,
+                        );
+                    IERC721Dispatcher { contract_address: nft }
+                        .transfer_from(fulfiller, details.consideration.recipient, token_id);
+                    (sale_amount, royalty_receiver, royalty_amount)
+                },
             }
         }
 
-        /// Reads the order, asserts it is in Created status, and returns the details.
-        /// Callers reuse the returned struct to avoid a second storage read.
-        fn _assert_order_status_created(
-            self: @ContractState, order_hash: felt252,
-        ) -> OrderDetails {
-            let order_details = self.orders.read(order_hash);
-            match order_details.order_status {
-                OrderStatus::None => panic!("Order not found"),
-                OrderStatus::Created => {},
-                OrderStatus::Filled => panic!("Order already filled"),
-                OrderStatus::Cancelled => panic!("Order cancelled"),
-            }
-            order_details
-        }
-
-        /// Calls `is_valid_signature` on the signer's SRC-6 account contract.
-        fn _validate_hash_signature(
+        /// Pulls `sale_amount` of the payment token from `payer`: the (capped)
+        /// EIP-2981 royalty to the creator, the remainder to `seller_recipient`.
+        fn _pay(
             self: @ContractState,
-            order_hash: felt252,
-            signer_address: ContractAddress,
+            payment_item_type: felt252,
+            payment_token: ContractAddress,
+            payer: ContractAddress,
+            seller_recipient: ContractAddress,
+            nft: ContractAddress,
+            token_id: u256,
+            sale_amount: u256,
+            royalty_max_bps: felt252,
+        ) -> (ContractAddress, u256) {
+            let token_address = self._payment_token(payment_item_type, payment_token);
+            let erc20 = IERC20Dispatcher { contract_address: token_address };
+
+            let (royalty_receiver, royalty_amount) = self
+                ._get_royalty(nft, token_id, sale_amount, royalty_max_bps);
+
+            if royalty_amount > 0 {
+                assert(royalty_amount <= sale_amount, errors::ROYALTY_EXCEEDS_SALE);
+                let ok = erc20.transfer_from(payer, royalty_receiver, royalty_amount);
+                assert(ok, errors::ROYALTY_TRANSFER_FAILED);
+            }
+
+            let seller_amount = sale_amount - royalty_amount;
+            if seller_amount > 0 {
+                let ok = erc20.transfer_from(payer, seller_recipient, seller_amount);
+                assert(ok, errors::TRANSFER_FAILED);
+            }
+
+            (royalty_receiver, royalty_amount)
+        }
+
+        /// Resolves the ERC20 contract used for payment (NATIVE => the native token).
+        fn _payment_token(
+            self: @ContractState, payment_item_type: felt252, payment_token: ContractAddress,
+        ) -> ContractAddress {
+            let parsed: ItemType = payment_item_type.try_into().unwrap();
+            match parsed {
+                ItemType::NATIVE => self.native_token_address.read(),
+                ItemType::ERC20 => payment_token,
+                ItemType::ERC721 => panic_with_felt252(errors::UNSUPPORTED_SHAPE),
+            }
+        }
+
+        /// EIP-2981 royalty for `nft`/`token_id` on `sale_amount`, capped at the
+        /// seller-signed `royalty_max_bps` (denominator 10_000). Any failure or a
+        /// non-2981 NFT yields no royalty (the seller keeps the full amount).
+        fn _get_royalty(
+            self: @ContractState,
+            nft: ContractAddress,
+            token_id: u256,
+            sale_amount: u256,
+            royalty_max_bps: felt252,
+        ) -> (ContractAddress, u256) {
+            let zero: ContractAddress = 0.try_into().unwrap();
+            if sale_amount == 0 {
+                return (zero, 0);
+            }
+
+            // Does the NFT advertise EIP-2981?
+            let supports = match call_contract_syscall(
+                nft, selector!("supports_interface"), array![IERC2981_ID].span(),
+            ) {
+                Result::Ok(ret) => ret.len() > 0 && *ret.at(0) != 0,
+                Result::Err(_) => false,
+            };
+            if !supports {
+                return (zero, 0);
+            }
+
+            // royalty_info(token_id, sale_amount) -> (receiver, amount)
+            let calldata = array![
+                token_id.low.into(), token_id.high.into(), sale_amount.low.into(),
+                sale_amount.high.into(),
+            ];
+            let (receiver, raw_amount) = match call_contract_syscall(
+                nft, selector!("royalty_info"), calldata.span(),
+            ) {
+                Result::Ok(ret) => {
+                    if ret.len() < 3 {
+                        return (zero, 0);
+                    }
+                    let recv: Option<ContractAddress> = (*ret.at(0)).try_into();
+                    let low: Option<u128> = (*ret.at(1)).try_into();
+                    let high: Option<u128> = (*ret.at(2)).try_into();
+                    match (recv, low, high) {
+                        (
+                            Option::Some(r), Option::Some(l), Option::Some(h),
+                        ) => (r, u256 { low: l, high: h }),
+                        _ => { return (zero, 0); },
+                    }
+                },
+                Result::Err(_) => { return (zero, 0); },
+            };
+
+            if receiver.is_zero() || raw_amount == 0 {
+                return (zero, 0);
+            }
+
+            // Cap at the seller-signed bound (F8).
+            let max_amount = (sale_amount * felt_to_u256(royalty_max_bps)) / BPS_DENOMINATOR;
+            let capped = if raw_amount > max_amount {
+                max_amount
+            } else {
+                raw_amount
+            };
+            if capped == 0 {
+                return (zero, 0);
+            }
+            (receiver, capped)
+        }
+
+        /// Asserts the order hash has never been seen (status == None).
+        fn _assert_status_none(self: @ContractState, order_hash: felt252) {
+            match self.orders.read(order_hash).order_status {
+                OrderStatus::None => {},
+                OrderStatus::Created => panic_with_felt252(errors::ORDER_ALREADY_CREATED),
+                OrderStatus::Filled => panic_with_felt252(errors::ORDER_ALREADY_FILLED),
+                OrderStatus::Cancelled => panic_with_felt252(errors::ORDER_CANCELLED),
+            }
+        }
+
+        /// Reads an order, asserts it is Created, and returns it.
+        fn _assert_status_created(self: @ContractState, order_hash: felt252) -> OrderDetails {
+            let details = self.orders.read(order_hash);
+            match details.order_status {
+                OrderStatus::None => panic_with_felt252(errors::ORDER_NOT_FOUND),
+                OrderStatus::Created => {},
+                OrderStatus::Filled => panic_with_felt252(errors::ORDER_ALREADY_FILLED),
+                OrderStatus::Cancelled => panic_with_felt252(errors::ORDER_CANCELLED),
+            }
+            details
+        }
+
+        /// Validates a SNIP-12 signature against the signer's SRC-6 account.
+        fn _validate_signature(
+            self: @ContractState,
+            hash: felt252,
+            signer: ContractAddress,
             signature: Array<felt252>,
         ) {
-            let result = ISRC6Dispatcher { contract_address: signer_address }
-                .is_valid_signature(order_hash, signature);
-            assert!(
-                result == starknet::VALIDATED || result == 1, "Invalid signature",
-            );
-        }
-
-        fn _validate_item(self: @ContractState, item: OfferItem, item_type: ItemType) {
-            match item_type {
-                ItemType::NATIVE => {
-                    assert!(item.token.is_zero(), "Token address must be zero");
-                    assert!(item.identifier_or_criteria == 0, "Invalid identifier");
-                    assert!(item.start_amount != 0, "Invalid amount");
-                },
-                ItemType::ERC20 => {
-                    assert!(!item.token.is_zero(), "Token address cannot be zero");
-                    assert!(item.identifier_or_criteria == 0, "Invalid identifier");
-                    assert!(item.start_amount != 0, "Invalid amount");
-                },
-                ItemType::ERC721 => {
-                    assert!(!item.token.is_zero(), "Token address cannot be zero");
-                    assert!(item.start_amount == 1, "Invalid amount");
-                    assert!(item.end_amount == 1, "Invalid amount");
-                },
-                ItemType::ERC1155 => {
-                    assert!(!item.token.is_zero(), "Token address cannot be zero");
-                    assert!(item.start_amount != 0, "Invalid amount");
-                },
-            }
-        }
-
-        fn _validate_consideration(
-            self: @ContractState, consideration: ConsiderationItem, item_type: ItemType,
-        ) {
-            assert!(!consideration.recipient.is_zero(), "Recipient cannot be zero");
-            let item = OfferItem {
-                item_type: consideration.item_type,
-                token: consideration.token,
-                identifier_or_criteria: consideration.identifier_or_criteria,
-                start_amount: consideration.start_amount,
-                end_amount: consideration.end_amount,
-            };
-            self._validate_item(item, item_type);
-        }
-
-        /// Transfers offered asset offerer→fulfiller and consideration fulfiller→recipient.
-        fn _execute_transfers(
-            ref self: ContractState, parameters: OrderDetails, fulfiller: ContractAddress,
-        ) {
-            let offerer = parameters.offerer;
-
-            let offer_type: Option<ItemType> = parameters.offer.item_type.try_into();
-            assert!(offer_type.is_some(), "Invalid item type");
-
-            self
-                ._transfer_item(
-                    felt_to_u256(parameters.offer.start_amount),
-                    parameters.offer.token,
-                    offer_type.unwrap(),
-                    felt_to_u256(parameters.offer.identifier_or_criteria),
-                    offerer,
-                    fulfiller,
-                );
-
-            let consideration = parameters.consideration;
-            assert!(!consideration.recipient.is_zero(), "Recipient cannot be zero");
-
-            let consideration_type: Option<ItemType> = consideration.item_type.try_into();
-            assert!(consideration_type.is_some(), "Invalid item type");
-
-            self
-                ._transfer_item(
-                    felt_to_u256(consideration.start_amount),
-                    consideration.token,
-                    consideration_type.unwrap(),
-                    felt_to_u256(consideration.identifier_or_criteria),
-                    fulfiller,
-                    consideration.recipient,
-                );
-        }
-
-        fn _transfer_item(
-            ref self: ContractState,
-            amount: u256,
-            token: ContractAddress,
-            item_type: ItemType,
-            identifier: u256,
-            from: ContractAddress,
-            to: ContractAddress,
-        ) {
-            assert!(amount > 0_u256, "Invalid amount");
-
-            match item_type {
-                ItemType::NATIVE => {
-                    let success = IERC20Dispatcher {
-                        contract_address: self.native_token_address.read(),
-                    }
-                        .transfer_from(from, to, amount);
-                    assert!(success, "STRK transfer failed");
-                },
-                ItemType::ERC20 => {
-                    assert!(!token.is_zero(), "Token address cannot be zero");
-                    let success = IERC20Dispatcher { contract_address: token }
-                        .transfer_from(from, to, amount);
-                    assert!(success, "Transfer failed");
-                },
-                ItemType::ERC721 => {
-                    assert!(amount == 1_u256, "Invalid amount");
-                    assert!(!token.is_zero(), "Token address cannot be zero");
-                    IERC721Dispatcher { contract_address: token }
-                        .transfer_from(from, to, identifier);
-                },
-                ItemType::ERC1155 => {
-                    assert!(!token.is_zero(), "Token address cannot be zero");
-                    IERC1155Dispatcher { contract_address: token }
-                        .safe_transfer_from(from, to, identifier, amount, array![].span());
-                },
-            }
+            let result = ISRC6Dispatcher { contract_address: signer }
+                .is_valid_signature(hash, signature);
+            assert(result == starknet::VALIDATED || result == 1, errors::INVALID_SIGNATURE);
         }
     }
 }

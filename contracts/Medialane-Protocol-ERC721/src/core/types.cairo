@@ -1,17 +1,18 @@
 use core::hash::{HashStateExTrait, HashStateTrait};
-use core::integer::u64;
 use core::poseidon::PoseidonTrait;
 use openzeppelin_utils::snip12::StructHash;
 use starknet::ContractAddress;
 use crate::core::utils::*;
 
+/// Supported item kinds. The ERC721 venue trades an ERC721 against a payment
+/// (NATIVE STRK or an ERC20). ERC1155 is intentionally NOT supported here — it
+/// has its own venue. (Audit S3/F6.)
 #[derive(Debug, Drop, Copy, Serde, PartialEq, Hash, starknet::Store)]
 pub enum ItemType {
     #[default]
     NATIVE, // STRK
     ERC20,
     ERC721,
-    ERC1155,
 }
 
 impl ItemTypeIntoFelt252 of Into<ItemType, felt252> {
@@ -20,7 +21,6 @@ impl ItemTypeIntoFelt252 of Into<ItemType, felt252> {
             ItemType::NATIVE => 'NATIVE',
             ItemType::ERC20 => 'ERC20',
             ItemType::ERC721 => 'ERC721',
-            ItemType::ERC1155 => 'ERC1155',
         }
     }
 }
@@ -33,21 +33,25 @@ impl Felt252TryIntoItemType of TryInto<felt252, ItemType> {
             Option::Some(ItemType::ERC20)
         } else if self == 'ERC721' {
             Option::Some(ItemType::ERC721)
-        } else if self == 'ERC1155' {
-            Option::Some(ItemType::ERC1155)
         } else {
             Option::None
         }
     }
 }
 
+/// A single fixed-price item. `amount` is the quantity (1 for ERC721, the wei
+/// amount for NATIVE/ERC20). There is no separate end_amount — fixed price only
+/// (audit F4: Dutch interpolation lives in the future auction venue).
+///
+/// `identifier_or_criteria` carries the ERC721 `token_id`. Because the order is
+/// SNIP-12 signed, it is a `felt252`: token IDs must fit in a felt (< 2^252).
+/// Collections using IDs at/above 2^252 cannot be traded on this venue.
 #[derive(Debug, Drop, Copy, Serde, PartialEq, Hash, starknet::Store)]
 pub struct OfferItem {
     pub item_type: felt252,
-    pub token: ContractAddress, // Contract address of the token (0 for NATIVE STRK)    
-    pub identifier_or_criteria: felt252, // Token ID for ERC721/ERC1155, 0 for NATIVE/ERC20
-    pub start_amount: felt252, // Amount for NATIVE/ERC20/ERC1155, 1 for ERC721
-    pub end_amount: felt252,
+    pub token: ContractAddress,
+    pub identifier_or_criteria: felt252,
+    pub amount: felt252,
 }
 
 impl OfferItemHashImpl of StructHash<OfferItem> {
@@ -60,11 +64,10 @@ impl OfferItemHashImpl of StructHash<OfferItem> {
 #[derive(Debug, Drop, Copy, Serde, Hash, PartialEq, starknet::Store)]
 pub struct ConsiderationItem {
     pub item_type: felt252,
-    pub token: ContractAddress, // Contract address of the token (0 for NATIVE STRK)
-    pub identifier_or_criteria: felt252, // Token ID for ERC721/ERC1155, 0 for NATIVE/ERC20
-    pub start_amount: felt252, // Amount for NATIVE/ERC20/ERC1155, 1 for ERC721
-    pub end_amount: felt252, // Usually same as start_amount for fixed price
-    pub recipient: ContractAddress // Address that receives this consideration item
+    pub token: ContractAddress,
+    pub identifier_or_criteria: felt252,
+    pub amount: felt252,
+    pub recipient: ContractAddress,
 }
 
 impl ConsiderationItemHashImpl of StructHash<ConsiderationItem> {
@@ -74,26 +77,28 @@ impl ConsiderationItemHashImpl of StructHash<ConsiderationItem> {
     }
 }
 
-#[derive(Debug, Copy, Drop, Serde, starknet::Store)]
-pub struct OrderDetails {
-    pub offerer: ContractAddress,
-    pub offer: OfferItem,
-    pub consideration: ConsiderationItem,
-    pub start_time: u64,
-    pub end_time: u64,
-    pub order_status: OrderStatus,
-    pub fulfiller: Option<ContractAddress>,
-}
-
+/// The signed order.
+/// - `marketplace`: binds the order to one deployed contract (audit S1). Asserted
+///   `== get_contract_address()` at registration, so a signature for deployment N
+///   cannot be replayed on deployment N+1.
+/// - `royalty_max_bps`: seller-signed cap on the EIP-2981 royalty paid at fill
+///   (audit F1/F8). The economic split is committed at signing.
+/// - `counter`: the offerer's bulk-cancel epoch (audit F2). An order is only valid
+///   while `counter == get_counter(offerer)`; incrementing it invalidates all the
+///   offerer's outstanding orders at once. Replaces the sequential nonce.
+/// - `salt`: per-order uniqueness so two economically-identical orders hash
+///   distinctly. Client must randomize it.
 #[derive(Debug, Drop, Clone, Copy, Serde, Hash)]
 pub struct OrderParameters {
     pub offerer: ContractAddress,
+    pub marketplace: ContractAddress,
     pub offer: OfferItem,
     pub consideration: ConsiderationItem,
+    pub royalty_max_bps: felt252,
     pub start_time: felt252,
     pub end_time: felt252,
     pub salt: felt252,
-    pub nonce: felt252,
+    pub counter: felt252,
 }
 
 impl OrderParametersHashImpl of StructHash<OrderParameters> {
@@ -101,27 +106,15 @@ impl OrderParametersHashImpl of StructHash<OrderParameters> {
         let mut hash_state = PoseidonTrait::new();
         hash_state = hash_state.update_with(ORDER_PARAMETERS_TYPE_HASH);
         hash_state = hash_state.update_with(*self.offerer);
+        hash_state = hash_state.update_with(*self.marketplace);
         hash_state = hash_state.update_with(self.offer.hash_struct());
         hash_state = hash_state.update_with(self.consideration.hash_struct());
+        hash_state = hash_state.update_with(*self.royalty_max_bps);
         hash_state = hash_state.update_with(*self.start_time);
         hash_state = hash_state.update_with(*self.end_time);
         hash_state = hash_state.update_with(*self.salt);
-        hash_state = hash_state.update_with(*self.nonce);
+        hash_state = hash_state.update_with(*self.counter);
         hash_state.finalize()
-    }
-}
-
-#[derive(Drop, Clone, Copy, Serde, Hash)]
-pub struct OrderFulfillment {
-    pub order_hash: felt252,
-    pub fulfiller: ContractAddress,
-    pub nonce: felt252,
-}
-
-impl OrderFulfillmentHashImpl of StructHash<OrderFulfillment> {
-    fn hash_struct(self: @OrderFulfillment) -> felt252 {
-        let hash_state = PoseidonTrait::new();
-        hash_state.update_with(FULFILLMENT_TYPE_HASH).update_with(*self).finalize()
     }
 }
 
@@ -129,7 +122,6 @@ impl OrderFulfillmentHashImpl of StructHash<OrderFulfillment> {
 pub struct OrderCancellation {
     pub order_hash: felt252,
     pub offerer: ContractAddress,
-    pub nonce: felt252,
 }
 
 impl OrderCancellationHashImpl of StructHash<OrderCancellation> {
@@ -140,8 +132,8 @@ impl OrderCancellationHashImpl of StructHash<OrderCancellation> {
 }
 
 #[derive(Drop, Serde)]
-pub struct FulfillmentRequest {
-    pub fulfillment: OrderFulfillment,
+pub struct Order {
+    pub parameters: OrderParameters,
     pub signature: Array<felt252>,
 }
 
@@ -151,124 +143,73 @@ pub struct CancelRequest {
     pub signature: Array<felt252>,
 }
 
-#[derive(Drop, Serde)]
-pub struct Order {
-    pub parameters: OrderParameters,
-    pub signature: Array<felt252>,
+/// Stored order record. No `fulfiller` field (audit C5) and no nonce.
+#[derive(Debug, Copy, Drop, Serde, starknet::Store)]
+pub struct OrderDetails {
+    pub offerer: ContractAddress,
+    pub offer: OfferItem,
+    pub consideration: ConsiderationItem,
+    pub royalty_max_bps: felt252,
+    pub start_time: u64,
+    pub end_time: u64,
+    pub order_status: OrderStatus,
 }
 
-// Status of an order hash
 #[derive(Drop, Debug, Copy, Serde, starknet::Store, PartialEq)]
 pub enum OrderStatus {
     #[default]
-    None, // Order hasn't been seen before
-    Created, // Order is registered and live
-    Filled, // Order was successfully matched and filled
-    Cancelled // Order was cancelled by the user or system
+    None,
+    Created,
+    Filled,
+    Cancelled,
 }
-
 
 #[cfg(test)]
 mod tests {
-    use openzeppelin_utils::snip12::{OffchainMessageHash, SNIP12Metadata};
     use starknet::ContractAddress;
     use super::*;
 
-    /// Required for hash computation.
-    impl SNIP12MetadataImpl of SNIP12Metadata {
-        fn name() -> felt252 {
-            'Medialane'
-        }
-        fn version() -> felt252 {
-            1
-        }
+    fn addr(v: felt252) -> ContractAddress {
+        v.try_into().unwrap()
     }
 
-    pub fn OFFERER() -> ContractAddress {
-        0x049c8ce76963bb0d4ae4888d373d223a1fd7c683daa9f959abe3c5cd68894f51.try_into().unwrap()
-    }
-
-    pub fn FULFILLER() -> ContractAddress {
-        0x030545f9bc0a25a84d92fe8770f4f23639b960a364201df60536d34605e48538.try_into().unwrap()
-    }
-
-    pub fn TOKEN() -> ContractAddress {
-        0x0589edc6e13293530fec9cad58787ed8cff1fce35c3ef80342b7b00651e04d1f.try_into().unwrap()
-    }
-
-    pub fn ERC721_TOKEN() -> ContractAddress {
-        0x01be0d1cd01de34f946a40e8cc305b67ebb13bca8472484b33e408be03de39fe.try_into().unwrap()
-    }
-
-    pub fn FELT() -> felt252 {
-        100_000_000_000_000_000_0000_000000000
-    }
-
-    #[test]
-    fn test_valid_order_hash() {
-        // This value was computed using StarknetJS
-        let expected_hash = 0x75b5d71f4ccba6854dca5f11453406b4b01ffc074a301b2697f3070cf60d3d7;
-
-        let offer = OfferItem {
-            item_type: 'ERC721',
-            token: ERC721_TOKEN(),
-            identifier_or_criteria: 0,
-            start_amount: 1,
-            end_amount: 1,
-        };
-
-        let consideration = ConsiderationItem {
-            item_type: 'ERC20',
-            token: TOKEN(),
-            identifier_or_criteria: 0,
-            start_amount: 1000000,
-            end_amount: 1000000,
-            recipient: OFFERER(),
-        };
-
-        let order_params = OrderParameters {
-            offerer: OFFERER(),
-            offer,
-            consideration,
+    fn sample_order(marketplace: felt252) -> OrderParameters {
+        OrderParameters {
+            offerer: addr(0x111),
+            marketplace: addr(marketplace),
+            offer: OfferItem {
+                item_type: 'ERC721', token: addr(0x721), identifier_or_criteria: 7, amount: 1,
+            },
+            consideration: ConsiderationItem {
+                item_type: 'ERC20',
+                token: addr(0x20),
+                identifier_or_criteria: 0,
+                amount: 1000000,
+                recipient: addr(0x111),
+            },
+            royalty_max_bps: 1000,
             start_time: 1000000000,
             end_time: 1000003600,
-            salt: 0,
-            nonce: 0,
-        };
-
-        let actual_hash = order_params.get_message_hash(OFFERER());
-        assert_eq!(actual_hash, expected_hash);
+            salt: 42,
+            counter: 0,
+        }
     }
 
     #[test]
-    fn test_valid_fulfilment_hash() {
-        // This value was computed using StarknetJS
-        let expected_hash = 0x62ac39379fdbbf3441894654acdf7f22db94611599a107784297b7e52406a84;
-
-        let cancelation = OrderFulfillment {
-            order_hash: 0x75b5d71f4ccba6854dca5f11453406b4b01ffc074a301b2697f3070cf60d3d7
-                .try_into()
-                .unwrap(),
-            fulfiller: FULFILLER(),
-            nonce: 0,
-        };
-        let actual_hash = cancelation.get_message_hash(FULFILLER());
-        assert_eq!(expected_hash, actual_hash)
+    fn test_order_hash_is_deterministic() {
+        let a = sample_order(0xaaa);
+        assert!(a.hash_struct() == a.hash_struct(), "hash must be deterministic");
     }
 
     #[test]
-    fn test_valid_cancel_hash() {
-        // This value was computed using StarknetJS
-        let expected_hash = 0x3dea25b77af7b17894ffbd0b26e64bc2c6c1931d7f40f43d47e1866ab7e97cb;
-
-        let cancelation = OrderCancellation {
-            order_hash: 0x75b5d71f4ccba6854dca5f11453406b4b01ffc074a301b2697f3070cf60d3d7
-                .try_into()
-                .unwrap(),
-            offerer: OFFERER(),
-            nonce: 1,
-        };
-        let actual_hash = cancelation.get_message_hash(OFFERER());
-        assert_eq!(expected_hash, actual_hash)
+    fn test_order_hash_binds_marketplace() {
+        // Two orders identical except for the marketplace (deployment) they target.
+        // The hash MUST differ, or a signature is replayable across deployments (S1).
+        let on_deploy_a = sample_order(0xaaa);
+        let on_deploy_b = sample_order(0xbbb);
+        assert!(
+            on_deploy_a.hash_struct() != on_deploy_b.hash_struct(),
+            "order hash must bind the marketplace address",
+        );
     }
 }

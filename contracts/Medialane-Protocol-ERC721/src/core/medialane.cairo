@@ -1,3 +1,15 @@
+/// Medialane721 — immutable ERC721 marketplace venue (Seaport-style signed orders).
+///
+/// Safety model — every check is on-chain and falls in exactly one bucket:
+///   1. Statically determinable from the signed order → validated at registration,
+///      fail-fast: offerer != 0, marketplace == self, counter, royalty_max_bps <= 10000,
+///      trade shape (ERC721 <-> {NATIVE, ERC20}, both directions, NFT contract != the
+///      resolved payment token), recipient != 0, time window, offerer signature.
+///   2. Mutable on-chain state (ownership, approval, balance, live EIP-2981) → not
+///      pre-simulated; enforced by atomic revert at fill. Settlement pulls payment
+///      before delivering the NFT, under a reentrancy guard with CEI.
+///
+/// No owner/admin/upgrade/pause. A future fix is a fresh declare + deploy.
 #[starknet::contract]
 pub mod Medialane721 {
     use openzeppelin_account::interface::{ISRC6Dispatcher, ISRC6DispatcherTrait};
@@ -210,6 +222,11 @@ pub mod Medialane721 {
                             consideration.token,
                             consideration.identifier_or_criteria,
                         );
+                    // The NFT contract must not double as the payment token, or the
+                    // transfer_from calls collide at fill. Compare against the
+                    // resolved payment token (native STRK for NATIVE).
+                    let pay = self._payment_token(consideration.item_type, consideration.token);
+                    assert(offer.token != pay, errors::PAYMENT_TOKEN_IS_NFT);
                 },
                 // Bid: payment for NFT.
                 ItemType::NATIVE | ItemType::ERC20 => {
@@ -225,6 +242,10 @@ pub mod Medialane721 {
                         ._validate_erc721_item(
                             consideration.token, consideration.amount,
                         );
+                    // The NFT contract must not double as the payment token (resolved
+                    // for NATIVE), or the transfer_from calls collide at fill.
+                    let pay = self._payment_token(offer.item_type, offer.token);
+                    assert(consideration.token != pay, errors::PAYMENT_TOKEN_IS_NFT);
                 },
             }
         }

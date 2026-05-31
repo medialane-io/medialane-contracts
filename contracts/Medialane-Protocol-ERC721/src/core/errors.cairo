@@ -20,6 +20,7 @@ pub mod errors {
     // Trade-shape / item validation
     pub const INVALID_ITEM_TYPE: felt252 = 'Invalid item type';
     pub const UNSUPPORTED_SHAPE: felt252 = 'Unsupported trade shape';
+    pub const PAYMENT_TOKEN_IS_NFT: felt252 = 'Payment token is the NFT';
     pub const INVALID_AMOUNT: felt252 = 'Invalid amount';
     pub const INVALID_TOKEN_ADDRESS: felt252 = 'Token address cannot be zero';
     pub const NONZERO_NATIVE_TOKEN: felt252 = 'Token address must be zero';

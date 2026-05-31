@@ -474,6 +474,27 @@ mod test {
     }
 
     #[test]
+    #[should_panic(expected: 'Payment token is the NFT')]
+    fn test_register_rejects_payment_token_equals_nft_listing() {
+        // Listing whose ERC20 payment token IS the NFT contract. At fill this would
+        // collide on the transfer_from selector; reject it as an incoherent trade.
+        let env = setup();
+        let mut params = listing_params(@env);
+        params.consideration.token = params.offer.token; // payment token == NFT
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
+    #[should_panic(expected: 'Payment token is the NFT')]
+    fn test_register_rejects_payment_token_equals_nft_bid() {
+        // Same collision in the bid direction (offer = payment, consideration = NFT).
+        let env = setup();
+        let mut params = bid_params(@env);
+        params.offer.token = params.consideration.token; // payment token == NFT
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+    }
+
+    #[test]
     #[should_panic(expected: 'Royalty bound too high')]
     fn test_register_rejects_royalty_bps_above_max() {
         // royalty_max_bps is a percentage in bps; > 10000 (100%) is nonsensical and

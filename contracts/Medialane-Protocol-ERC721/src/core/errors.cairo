@@ -26,6 +26,7 @@ pub mod errors {
     pub const NONZERO_NATIVE_TOKEN: felt252 = 'Token address must be zero';
     pub const INVALID_IDENTIFIER: felt252 = 'Invalid identifier';
     pub const INVALID_OFFERER: felt252 = 'Offerer cannot be zero';
+    pub const INVALID_NATIVE_TOKEN: felt252 = 'Native token cannot be zero';
     pub const INVALID_RECIPIENT: felt252 = 'Recipient cannot be zero';
 
     // Settlement

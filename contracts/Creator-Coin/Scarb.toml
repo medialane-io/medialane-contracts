@@ -9,6 +9,7 @@ openzeppelin_access = "=2.0.0"
 openzeppelin_introspection = "=2.0.0"
 openzeppelin_token = "=2.0.0"
 openzeppelin_utils = "=2.0.0"
+ekubo = { git = "https://github.com/EkuboProtocol/abis" }
 
 [dev-dependencies]
 snforge_std = "0.59.0"

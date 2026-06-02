@@ -5,12 +5,18 @@ version = 1
 name = "creator_coin"
 version = "0.1.0"
 dependencies = [
+ "ekubo",
  "openzeppelin_access",
  "openzeppelin_introspection",
  "openzeppelin_token",
  "openzeppelin_utils",
  "snforge_std",
 ]
+
+[[package]]
+name = "ekubo"
+version = "0.1.0"
+source = "git+https://github.com/EkuboProtocol/abis#f6915eb16f98434e801e03a1057407d4c520b846"
 
 [[package]]
 name = "openzeppelin_access"

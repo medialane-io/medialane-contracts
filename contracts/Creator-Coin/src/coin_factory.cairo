@@ -15,7 +15,7 @@ pub mod CoinFactory {
     use openzeppelin_token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use creator_coin::interfaces::ICoinFactory::ICoinFactory;
     use creator_coin::interfaces::IExchangeAdapter::{
-        IExchangeAdapterDispatcher, IExchangeAdapterDispatcherTrait,
+        IExchangeAdapterDispatcher, IExchangeAdapterDispatcherTrait, TickParams,
     };
     use creator_coin::interfaces::ILiquidityLock::{
         ILiquidityLockDispatcher, ILiquidityLockDispatcherTrait,
@@ -111,6 +111,7 @@ pub mod CoinFactory {
             creator_allocation_bps: u16,
             seed_amount: u256,
             lock_duration: u64,
+            ticks: TickParams,
         ) -> (felt252, u64) {
             // ── Guards (anti-rug; 00 §1) ────────────────────────────────────
             assert(creator_allocation_bps <= MAX_ALLOCATION_BPS, 'Allocation too high');
@@ -140,14 +141,16 @@ pub mod CoinFactory {
 
             // Provision liquidity; adapter returns the LP position.
             let adapter = IExchangeAdapterDispatcher { contract_address: adapter_addr };
-            let result = adapter.add_liquidity(coin, quote_token, pool_allocation, seed_amount);
+            let result = adapter
+                .add_liquidity(coin, quote_token, pool_allocation, seed_amount, ticks);
 
             // Move the LP position into the locker and record the lock.
             let lock_addr = self.liquidity_lock.read();
             adapter.transfer_position(result.position_id, lock_addr);
+            let nft_address = adapter.position_nft_address();
             let unlock_time = get_block_timestamp() + lock_duration;
             let lock_id = ILiquidityLockDispatcher { contract_address: lock_addr }
-                .lock(coin, creator, result.position_id, unlock_time);
+                .lock(coin, creator, nft_address, result.position_id, unlock_time);
 
             // Update record + emit.
             rec.quote_token = quote_token;

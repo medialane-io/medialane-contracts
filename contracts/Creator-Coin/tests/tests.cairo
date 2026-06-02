@@ -10,6 +10,8 @@ mod test {
         ICoinFactoryDispatcher, ICoinFactoryDispatcherTrait,
     };
     use creator_coin::mocks::erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
+    use creator_coin::mocks::erc721::{IMockERC721Dispatcher, IMockERC721DispatcherTrait};
+    use creator_coin::interfaces::IExchangeAdapter::TickParams;
     use openzeppelin_token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use snforge_std::{
         CheatSpan, ContractClassTrait, DeclareResultTrait, cheat_caller_address, declare,
@@ -27,6 +29,21 @@ mod test {
     }
     fn COIN() -> ContractAddress {
         0xC01.try_into().unwrap()
+    }
+    fn ADMIN() -> ContractAddress {
+        0xAD.try_into().unwrap()
+    }
+
+    fn default_ticks() -> TickParams {
+        // The mock ignores ticks; real values are computed off-chain for Ekubo.
+        TickParams {
+            initial_tick_mag: 0,
+            initial_tick_sign: false,
+            lower_mag: 88368108,
+            lower_sign: true,
+            upper_mag: 88368108,
+            upper_sign: false,
+        }
     }
 
     // ── Deploy helpers ──────────────────────────────────────────────────────
@@ -75,25 +92,36 @@ mod test {
         ILiquidityLockDispatcher { contract_address: addr }
     }
 
-    /// Lock with unlock_time = 1000, beneficiary = CREATOR.
-    fn make_lock() -> (ILiquidityLockDispatcher, u64) {
+    fn deploy_nft(owner: ContractAddress) -> IMockERC721Dispatcher {
+        let cls = declare("MockERC721").unwrap().contract_class();
+        let (addr, _) = cls.deploy(@array![owner.into()]).unwrap();
+        IMockERC721Dispatcher { contract_address: addr }
+    }
+
+    /// Lock owning position NFT #7, unlock_time = 1000, beneficiary = CREATOR.
+    fn make_lock() -> (ILiquidityLockDispatcher, IMockERC721Dispatcher, u64) {
         let lock = deploy_lock();
-        let id = lock.lock(COIN(), CREATOR(), 7_u256, 1000_u64);
-        (lock, id)
+        let nft = deploy_nft(ADMIN());
+        // Mint position NFT #7 into the lock contract (owner-gated mint).
+        cheat_caller_address(nft.contract_address, ADMIN(), CheatSpan::TargetCalls(1));
+        nft.mint_token(lock.contract_address, 7_u256);
+        let id = lock.lock(COIN(), CREATOR(), nft.contract_address, 7_u256, 1000_u64);
+        (lock, nft, id)
     }
 
     #[test]
     fn test_lock_records_beneficiary_and_unlock() {
-        let (lock, id) = make_lock();
+        let (lock, _nft, id) = make_lock();
         assert(lock.beneficiary_of(id) == CREATOR(), 'beneficiary wrong');
         assert(lock.unlock_time_of(id) == 1000, 'unlock wrong');
+        assert(lock.position_id_of(id) == 7, 'position wrong');
         assert(!lock.is_withdrawn(id), 'should not be withdrawn');
     }
 
     #[test]
     #[should_panic(expected: ('Still locked',))]
     fn test_withdraw_before_unlock_reverts() {
-        let (lock, id) = make_lock();
+        let (lock, _nft, id) = make_lock();
         start_cheat_block_timestamp_global(999_u64);
         cheat_caller_address(lock.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
         lock.withdraw(id);
@@ -103,7 +131,7 @@ mod test {
     #[test]
     #[should_panic(expected: ('Not beneficiary',))]
     fn test_non_beneficiary_cannot_withdraw() {
-        let (lock, id) = make_lock();
+        let (lock, _nft, id) = make_lock();
         start_cheat_block_timestamp_global(2000_u64);
         cheat_caller_address(lock.contract_address, FAN(), CheatSpan::TargetCalls(1));
         lock.withdraw(id);
@@ -111,13 +139,14 @@ mod test {
     }
 
     #[test]
-    fn test_withdraw_after_unlock_succeeds() {
-        let (lock, id) = make_lock();
+    fn test_withdraw_after_unlock_returns_nft() {
+        let (lock, nft, id) = make_lock();
         start_cheat_block_timestamp_global(2000_u64);
         cheat_caller_address(lock.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
         lock.withdraw(id);
         stop_cheat_block_timestamp_global();
         assert(lock.is_withdrawn(id), 'should be withdrawn');
+        assert(nft.get_owner(7_u256) == CREATOR(), 'nft not returned');
     }
 
     // ── CoinFactory (Tasks 4 + 6) ───────────────────────────────────────────
@@ -173,7 +202,7 @@ mod test {
         cheat_caller_address(factory.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
         // 10% allocation, 100 seed, 180-day lock
         let (pool_id, lock_id) = factory
-            .launch_on_ekubo(coin, quote, 1000_u16, 100_u256, 15_552_000_u64);
+            .launch_on_ekubo(coin, quote, 1000_u16, 100_u256, 15_552_000_u64, default_ticks());
 
         assert(pool_id == 0xC01, 'pool id wrong');
         let rec = factory.get_coin(1);
@@ -193,7 +222,7 @@ mod test {
     fn test_launch_rejects_allocation_over_cap() {
         let (factory, coin, quote) = launched_setup();
         cheat_caller_address(factory.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
-        factory.launch_on_ekubo(coin, quote, 1001_u16, 100_u256, 15_552_000_u64);
+        factory.launch_on_ekubo(coin, quote, 1001_u16, 100_u256, 15_552_000_u64, default_ticks());
     }
 
     #[test]
@@ -201,7 +230,7 @@ mod test {
     fn test_launch_rejects_short_lock() {
         let (factory, coin, quote) = launched_setup();
         cheat_caller_address(factory.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
-        factory.launch_on_ekubo(coin, quote, 1000_u16, 100_u256, 100_u64);
+        factory.launch_on_ekubo(coin, quote, 1000_u16, 100_u256, 100_u64, default_ticks());
     }
 
     #[test]
@@ -209,6 +238,6 @@ mod test {
     fn test_launch_rejects_zero_seed() {
         let (factory, coin, quote) = launched_setup();
         cheat_caller_address(factory.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
-        factory.launch_on_ekubo(coin, quote, 1000_u16, 0_u256, 15_552_000_u64);
+        factory.launch_on_ekubo(coin, quote, 1000_u16, 0_u256, 15_552_000_u64, default_ticks());
     }
 }

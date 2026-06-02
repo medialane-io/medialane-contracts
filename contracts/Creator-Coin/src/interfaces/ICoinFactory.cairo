@@ -1,5 +1,6 @@
 use starknet::{ContractAddress, ClassHash};
 use creator_coin::types::CoinRecord;
+use creator_coin::interfaces::IExchangeAdapter::TickParams;
 
 #[starknet::interface]
 pub trait ICoinFactory<TState> {
@@ -13,6 +14,7 @@ pub trait ICoinFactory<TState> {
         creator_allocation_bps: u16,
         seed_amount: u256,
         lock_duration: u64,
+        ticks: TickParams,
     ) -> (felt252, u64);
     fn get_coin(self: @TState, coin_id: u256) -> CoinRecord;
     fn get_last_coin_id(self: @TState) -> u256;

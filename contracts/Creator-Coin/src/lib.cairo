@@ -1,4 +1,5 @@
 pub mod creator_coin;
+pub mod liquidity_lock;
 pub mod types;
 pub mod events;
 pub mod interfaces {

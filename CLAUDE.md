@@ -184,6 +184,47 @@ DROP_START_BLOCK=8341335
 
 ---
 
+### Creator-Coin (`contracts/Creator-Coin/`)
+
+Permissionless launchpad for **Creator Coins**: a creator deploys a fixed-supply
+ERC-20 and launches it into a **locked-liquidity Ekubo pool** with a **capped
+creator allocation**. Immutable/ownerless factory + per-coin ERC-20 + a liquidity
+locker + an Ekubo adapter. Trading happens on Ekubo (standard ERC-20).
+
+- **Status**: design/implementation — **12 snforge tests green**, Ekubo adapter
+  compiles vs `EkuboProtocol/abis`. **NOT deployed.** Pending: mainnet-fork test,
+  `cairo-auditor` gate, deploy. Branch `feat/creator-coin`.
+- **Contracts**: `CreatorCoin` (ERC-20), `CoinFactory` (`create_coin` +
+  `launch_on_ekubo`, on-chain alloc-cap/min-lock/supply guards), `LiquidityLock`
+  (position-NFT custody), `exchanges::EkuboAdapter`.
+- **Design docs**: `medialane-core/docs/specs/2026-06-02-creator-coin-launchpad-design.md`,
+  `medialane-core/docs/plans/2026-06-02-creator-coin-contracts.md`.
+
+> **Toolchain note (modern):** this package uses **scarb 2.18 / OZ 2.0.0 (exact
+> `=2.0.0`) / snforge_std 0.59**, pinned in `contracts/Creator-Coin/.tool-versions`
+> — *not* the scarb 2.11.4 + `snforge_std_deprecated` path documented above for the
+> older packages (that scarb is no longer installed; the repo is mid-migration).
+> Build/test from the package dir with a plain `scarb build` / `snforge test`.
+
+**Build + test:**
+```bash
+cd contracts/Creator-Coin
+scarb build
+snforge test
+```
+
+**Key event indexed by backend (post-deploy):**
+- `CoinFactory::CoinLaunched` → registers a `Collection` (`standard: ERC20`,
+  `service: creator-coin`) + a `CoinMarket` projection.
+
+**Backend env vars (to add post-deploy):**
+```
+CREATOR_COIN_FACTORY_ADDRESS=0x...
+CREATOR_COIN_START_BLOCK=<block>
+```
+
+---
+
 ### Medialane-Protocol-ERC721 (`contracts/Medialane-Protocol-ERC721/`)
 
 > **REDESIGN IN PROGRESS (2026-05-30, branch `feat/marketplace-721-redesign`, NOT yet audited/deployed).**

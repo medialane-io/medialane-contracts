@@ -1,5 +1,3 @@
-use starknet::ContractAddress;
-
 /// Test hook to drive the factory's cap assertion.
 #[starknet::interface]
 pub trait IMockExchangeConfig<TState> {

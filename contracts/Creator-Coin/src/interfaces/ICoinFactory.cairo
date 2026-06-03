@@ -4,10 +4,10 @@ use creator_coin::interfaces::IExchangeAdapter::TickParams;
 
 #[starknet::interface]
 pub trait ICoinFactory<TState> {
-    /// Deploy a fixed-supply ERC-20 and launch it on Ekubo in one tx:
-    /// full supply into the pool, a <=10% founder buyback paid in `quote_token`,
-    /// bought coins + the LP position handed to the caller (the creator).
-    /// `creator_allocation_bps` is the *cap* the buyback must not exceed.
+    /// Deploy a fixed-supply ERC-20 and launch it on Ekubo in one tx (unrug's model):
+    /// the creator keeps a capped founder allocation (<=10%, transferred directly),
+    /// the remaining supply is deposited as single-sided liquidity, and the LP
+    /// position NFT goes to the creator. No swap, no quote paid by the creator.
     fn launch(
         ref self: TState,
         name: ByteArray,
@@ -15,7 +15,6 @@ pub trait ICoinFactory<TState> {
         total_supply: u256,
         quote_token: ContractAddress,
         creator_allocation_bps: u16,
-        buyback_quote_amount: u256,
         ticks: TickParams,
     ) -> (ContractAddress, felt252);
     fn get_coin(self: @TState, coin_id: u256) -> CoinRecord;

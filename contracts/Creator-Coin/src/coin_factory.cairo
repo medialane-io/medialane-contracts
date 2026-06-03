@@ -1,10 +1,10 @@
 /// CoinFactory — permissionless, ownerless, non-custodial launcher for Creator Coins.
 ///
-/// One atomic `launch`: deploy a fixed-supply ERC-20, deposit the full supply into an
-/// Ekubo pool at the creator-set price, run a <=10% founder buyback paid in the chosen
-/// quote token, and hand the bought coins AND the LP position to the creator. The
-/// platform holds nothing afterward. No admin, no setters, no fee (00 §2/§12). The
-/// <=10% cap is the only on-chain guarantee, enforced as a post-buyback assertion.
+/// One atomic `launch` (unrug's proven model): deploy a fixed-supply ERC-20, give the
+/// creator a capped founder allocation (<=10%, transferred directly), deposit the
+/// remaining supply as single-sided liquidity on Ekubo, and hand the LP position to
+/// the creator. The platform holds nothing afterward. No admin, no setters, no fee, no
+/// swap (00 §2/§12). The <=10% cap is the on-chain anti-rug guarantee.
 #[starknet::contract]
 pub mod CoinFactory {
     use starknet::{ClassHash, ContractAddress, get_caller_address, get_block_timestamp};
@@ -20,7 +20,7 @@ pub mod CoinFactory {
     use creator_coin::types::CoinRecord;
     use creator_coin::events::CoinLaunched;
 
-    /// Founder buyback may take at most 10% of supply.
+    /// Founder allocation may be at most 10% of supply.
     const MAX_ALLOCATION_BPS: u16 = 1000;
     const BPS_DENOMINATOR: u256 = 10000;
 
@@ -60,7 +60,6 @@ pub mod CoinFactory {
             total_supply: u256,
             quote_token: ContractAddress,
             creator_allocation_bps: u16,
-            buyback_quote_amount: u256,
             ticks: TickParams,
         ) -> (ContractAddress, felt252) {
             assert(name.len() > 0, 'Name empty');
@@ -83,28 +82,24 @@ pub mod CoinFactory {
             )
                 .unwrap();
 
-            // 2. Move the full supply + the creator's buyback quote to the adapter.
-            let adapter_addr = self.exchange_adapter.read();
-            IERC20Dispatcher { contract_address: coin_address }
-                .transfer(adapter_addr, total_supply);
-            if buyback_quote_amount > 0 {
-                IERC20Dispatcher { contract_address: quote_token }
-                    .transfer_from(creator, adapter_addr, buyback_quote_amount);
+            // 2. Split: creator keeps the capped allocation, the pool gets the rest.
+            let creator_allocation: u256 = total_supply
+                * creator_allocation_bps.into()
+                / BPS_DENOMINATOR;
+            let pool_amount: u256 = total_supply - creator_allocation;
+            let coin = IERC20Dispatcher { contract_address: coin_address };
+            if creator_allocation > 0 {
+                coin.transfer(creator, creator_allocation);
             }
 
-            // 3. Adapter deposits the supply, runs the buyback, and hands the bought
-            //    coins + the LP position to the creator.
+            // 3. Deposit the rest as single-sided liquidity; position NFT -> creator.
+            let adapter_addr = self.exchange_adapter.read();
+            coin.transfer(adapter_addr, pool_amount);
             let adapter = IExchangeAdapterDispatcher { contract_address: adapter_addr };
             let result = adapter
-                .launch(
-                    coin_address, quote_token, total_supply, buyback_quote_amount, creator, ticks,
-                );
+                .add_liquidity(coin_address, quote_token, pool_amount, creator, ticks);
 
-            // 4. Enforce the cap on what the buyback actually delivered.
-            let cap: u256 = total_supply * creator_allocation_bps.into() / BPS_DENOMINATOR;
-            assert(result.coins_bought <= cap, 'Buyback over cap');
-
-            // 5. Record + index + emit.
+            // 4. Record + index + emit.
             self.last_coin_id.write(next_id);
             self.coin_id_of.entry(coin_address).write(next_id);
             self
@@ -135,7 +130,6 @@ pub mod CoinFactory {
                         quote_token,
                         total_supply,
                         creator_allocation_bps,
-                        coins_bought: result.coins_bought,
                         pool_id: result.pool_id,
                         timestamp: get_block_timestamp(),
                     },

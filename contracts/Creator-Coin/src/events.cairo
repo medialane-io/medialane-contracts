@@ -10,7 +10,6 @@ pub struct CoinLaunched {
     pub quote_token: ContractAddress,
     pub total_supply: u256,
     pub creator_allocation_bps: u16,
-    pub coins_bought: u256,
     pub pool_id: felt252,
     pub timestamp: u64,
 }

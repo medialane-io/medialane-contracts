@@ -7,10 +7,6 @@ mod test {
         ICoinFactoryDispatcher, ICoinFactoryDispatcherTrait,
     };
     use creator_coin::interfaces::IExchangeAdapter::TickParams;
-    use creator_coin::mocks::erc20::{IMockERC20Dispatcher, IMockERC20DispatcherTrait};
-    use creator_coin::mocks::MockExchange::{
-        IMockExchangeConfigDispatcher, IMockExchangeConfigDispatcherTrait,
-    };
     use openzeppelin_token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use snforge_std::{
         CheatSpan, ContractClassTrait, DeclareResultTrait, cheat_caller_address, declare,
@@ -19,6 +15,12 @@ mod test {
 
     fn CREATOR() -> ContractAddress {
         0xC0FFEE.try_into().unwrap()
+    }
+
+    /// Dummy quote/pair token. Never dispatched to in unit tests — the creator pays no
+    /// quote (single-sided model), and the MockExchange ignores it.
+    fn QUOTE() -> ContractAddress {
+        0x57414b.try_into().unwrap()
     }
 
     fn default_ticks() -> TickParams {
@@ -63,7 +65,7 @@ mod test {
         );
     }
 
-    // ── CoinFactory.launch ──────────────────────────────────────────────────
+    // ── CoinFactory.launch (split: creator keeps <=10%, rest to the pool) ─────
     fn deploy_factory() -> (ICoinFactoryDispatcher, ContractAddress) {
         let coin_cls = declare("CreatorCoin").unwrap().contract_class();
         let ex_cls = declare("MockExchange").unwrap().contract_class();
@@ -76,83 +78,43 @@ mod test {
         (ICoinFactoryDispatcher { contract_address: addr }, ex_addr)
     }
 
-    fn deploy_quote(owner: ContractAddress) -> IMockERC20Dispatcher {
-        let cls = declare("MockERC20").unwrap().contract_class();
-        let (addr, _) = cls.deploy(@array![owner.into()]).unwrap();
-        IMockERC20Dispatcher { contract_address: addr }
-    }
+    #[test]
+    fn test_launch_splits_allocation_and_pool() {
+        let (factory, ex_addr) = deploy_factory();
+        cheat_caller_address(factory.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
+        // 10% founder allocation
+        let (coin, pool_id) = factory
+            .launch("Acme Coin", "ACME", 1_000_000_u256, QUOTE(), 1000_u16, default_ticks());
 
-    /// Mint `amount` quote to CREATOR and approve the factory to pull it.
-    /// Uses targeted caller cheats so the factory's own internal token calls
-    /// keep their real (factory) caller.
-    fn fund_and_approve(
-        quote: IMockERC20Dispatcher, factory: ContractAddress, amount: u256,
-    ) {
-        cheat_caller_address(quote.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
-        quote.mint_token(CREATOR(), amount);
-        cheat_caller_address(quote.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
-        IERC20Dispatcher { contract_address: quote.contract_address }.approve(factory, amount);
+        assert(pool_id == 0xC01, 'pool id wrong');
+        let erc20 = IERC20Dispatcher { contract_address: coin };
+        // creator keeps 10% directly
+        assert(erc20.balance_of(CREATOR()) == 100_000, 'creator alloc wrong');
+        // the other 90% went to the pool (held by the adapter in this mock)
+        assert(erc20.balance_of(ex_addr) == 900_000, 'pool amount wrong');
+        let rec = factory.get_coin(1);
+        assert(rec.creator == CREATOR(), 'creator wrong');
+        assert(rec.creator_allocation_bps == 1000, 'alloc bps wrong');
+        assert(factory.get_creator_coin_count(CREATOR()) == 1, 'count wrong');
     }
 
     #[test]
-    fn test_launch_happy_path_buyback_to_creator() {
+    fn test_launch_zero_allocation_all_to_pool() {
         let (factory, ex_addr) = deploy_factory();
-        let quote = deploy_quote(CREATOR());
-        // mock will deliver exactly 10% (100_000) on buyback
-        IMockExchangeConfigDispatcher { contract_address: ex_addr }.set_coins_bought(100_000_u256);
-        fund_and_approve(quote, factory.contract_address, 1000_u256);
-
         cheat_caller_address(factory.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
-        let (coin, pool_id) = factory
-            .launch(
-                "Acme Coin",
-                "ACME",
-                1_000_000_u256,
-                quote.contract_address,
-                1000_u16,
-                100_u256,
-                default_ticks(),
-            );
+        let (coin, _) = factory
+            .launch("Acme Coin", "ACME", 1_000_000_u256, QUOTE(), 0_u16, default_ticks());
 
-        assert(pool_id == 0xC01, 'pool id wrong');
-        let rec = factory.get_coin(1);
-        assert(rec.creator == CREATOR(), 'creator wrong');
-        assert(rec.total_supply == 1_000_000, 'supply wrong');
-        // creator received the bought 10%
-        assert(
-            IERC20Dispatcher { contract_address: coin }.balance_of(CREATOR()) == 100_000,
-            'creator buyback wrong',
-        );
-        assert(factory.get_creator_coin_count(CREATOR()) == 1, 'count wrong');
+        let erc20 = IERC20Dispatcher { contract_address: coin };
+        assert(erc20.balance_of(CREATOR()) == 0, 'creator should hold 0');
+        assert(erc20.balance_of(ex_addr) == 1_000_000, 'all to pool');
     }
 
     #[test]
     #[should_panic(expected: ('Allocation too high',))]
     fn test_launch_rejects_bps_over_cap() {
         let (factory, _ex) = deploy_factory();
-        let quote = deploy_quote(CREATOR());
-        fund_and_approve(quote, factory.contract_address, 1000_u256);
         cheat_caller_address(factory.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
-        factory
-            .launch(
-                "Acme", "ACME", 1_000_000_u256, quote.contract_address, 1001_u16, 100_u256,
-                default_ticks(),
-            );
-    }
-
-    #[test]
-    #[should_panic(expected: ('Buyback over cap',))]
-    fn test_launch_rejects_buyback_exceeding_cap() {
-        let (factory, ex_addr) = deploy_factory();
-        let quote = deploy_quote(CREATOR());
-        // mock delivers 150_000 (15%) but cap bps says 10% → must revert
-        IMockExchangeConfigDispatcher { contract_address: ex_addr }.set_coins_bought(150_000_u256);
-        fund_and_approve(quote, factory.contract_address, 1000_u256);
-        cheat_caller_address(factory.contract_address, CREATOR(), CheatSpan::TargetCalls(1));
-        factory
-            .launch(
-                "Acme", "ACME", 1_000_000_u256, quote.contract_address, 1000_u16, 100_u256,
-                default_ticks(),
-            );
+        factory.launch("Acme", "ACME", 1_000_000_u256, QUOTE(), 1001_u16, default_ticks());
     }
 }

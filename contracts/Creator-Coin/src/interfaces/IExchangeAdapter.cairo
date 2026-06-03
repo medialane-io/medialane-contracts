@@ -1,6 +1,6 @@
 use starknet::ContractAddress;
 
-/// Off-chain-computed Ekubo tick params (initial price + full-range bounds),
+/// Off-chain-computed Ekubo tick params (initial price + single-sided range bounds),
 /// split into (magnitude, sign) so the interface stays AMM-agnostic
 /// (the MockExchange ignores them).
 #[derive(Drop, Serde, Copy)]
@@ -13,35 +13,26 @@ pub struct TickParams {
     pub upper_sign: bool,
 }
 
-/// Result of a launch: pool identity, the LP position NFT id, and how many
-/// coins the buyback actually delivered to the creator.
+/// Result of provisioning liquidity: the pool identity and the LP position NFT id.
 #[derive(Drop, Serde)]
 pub struct LaunchResult {
     pub pool_id: felt252,
     pub position_id: u256,
-    pub coins_bought: u256,
 }
 
 #[starknet::interface]
 pub trait IExchangeAdapter<TState> {
-    /// The factory transfers `coin_supply` of `coin` and `quote_in` of `quote`
-    /// to the adapter before calling. The adapter then, atomically:
-    ///   1. initialises the pool at `ticks.initial_tick`,
-    ///   2. deposits the full `coin_supply` as liquidity over `[lower, upper]`,
-    ///   3. swaps `quote_in` of `quote` for `coin` (the founder buyback) and
-    ///      transfers the bought coins to `creator`,
-    ///   4. transfers the LP position NFT to `creator`.
-    /// Returns the pool id, the position id, and `coins_bought`.
-    fn launch(
+    /// Deposits `coin_amount` of `coin` as **single-sided** liquidity in the
+    /// coin/quote pool at the off-chain-computed `ticks`, and transfers the resulting
+    /// LP position NFT to `recipient` (the creator). The factory transfers
+    /// `coin_amount` to the adapter before calling. No quote is provided — quote
+    /// enters the pool only as the public buys (unrug's proven model).
+    fn add_liquidity(
         ref self: TState,
         coin: ContractAddress,
         quote: ContractAddress,
-        coin_supply: u256,
-        quote_in: u256,
-        creator: ContractAddress,
+        coin_amount: u256,
+        recipient: ContractAddress,
         ticks: TickParams,
     ) -> LaunchResult;
-
-    /// The ERC-721 contract that represents LP positions.
-    fn position_nft_address(self: @TState) -> ContractAddress;
 }

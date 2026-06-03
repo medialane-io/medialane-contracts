@@ -9,7 +9,5 @@ pub struct CoinRecord {
     pub total_supply: u256,
     pub creator_allocation_bps: u16,
     pub pool_id: felt252,
-    pub lock_id: u64,
-    pub lock_expiry: u64,
     pub created_at: u64,
 }

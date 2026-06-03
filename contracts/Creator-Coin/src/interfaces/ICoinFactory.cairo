@@ -4,18 +4,20 @@ use creator_coin::interfaces::IExchangeAdapter::TickParams;
 
 #[starknet::interface]
 pub trait ICoinFactory<TState> {
-    fn create_coin(
-        ref self: TState, name: ByteArray, symbol: ByteArray, total_supply: u256,
-    ) -> ContractAddress;
-    fn launch_on_ekubo(
+    /// Deploy a fixed-supply ERC-20 and launch it on Ekubo in one tx:
+    /// full supply into the pool, a <=10% founder buyback paid in `quote_token`,
+    /// bought coins + the LP position handed to the caller (the creator).
+    /// `creator_allocation_bps` is the *cap* the buyback must not exceed.
+    fn launch(
         ref self: TState,
-        coin: ContractAddress,
+        name: ByteArray,
+        symbol: ByteArray,
+        total_supply: u256,
         quote_token: ContractAddress,
         creator_allocation_bps: u16,
-        seed_amount: u256,
-        lock_duration: u64,
+        buyback_quote_amount: u256,
         ticks: TickParams,
-    ) -> (felt252, u64);
+    ) -> (ContractAddress, felt252);
     fn get_coin(self: @TState, coin_id: u256) -> CoinRecord;
     fn get_last_coin_id(self: @TState) -> u256;
     fn get_creator_coin_count(self: @TState, creator: ContractAddress) -> u32;

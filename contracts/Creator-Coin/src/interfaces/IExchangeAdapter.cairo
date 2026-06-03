@@ -1,13 +1,8 @@
 use starknet::ContractAddress;
 
-/// Off-chain-computed tick parameters for an Ekubo launch.
-///
-/// The dapp/SDK computes the initial price tick (from the desired
-/// quote/coin ratio) and the full-range bounds (from Ekubo's MAX_TICK +
-/// the pool's tick_spacing) using Ekubo's SDK, and passes them in. This keeps
-/// the on-chain adapter free of log/tick math and of protocol constants.
-/// Ticks are expressed as Ekubo `i129` split into (magnitude, sign) so this
-/// interface stays AMM-agnostic (MockExchange ignores them).
+/// Off-chain-computed Ekubo tick params (initial price + full-range bounds),
+/// split into (magnitude, sign) so the interface stays AMM-agnostic
+/// (the MockExchange ignores them).
 #[derive(Drop, Serde, Copy)]
 pub struct TickParams {
     pub initial_tick_mag: u128,
@@ -18,32 +13,35 @@ pub struct TickParams {
     pub upper_sign: bool,
 }
 
-/// Result of provisioning a pool.
-/// `pool_id` is an opaque identifier (the Ekubo adapter uses the Poseidon hash
-/// of the PoolKey, since Ekubo pools are keyed by struct, not a felt).
-/// `position_id` is the LP position NFT id (Ekubo's are u64, widened to u256).
+/// Result of a launch: pool identity, the LP position NFT id, and how many
+/// coins the buyback actually delivered to the creator.
 #[derive(Drop, Serde)]
 pub struct LaunchResult {
     pub pool_id: felt252,
     pub position_id: u256,
+    pub coins_bought: u256,
 }
 
 #[starknet::interface]
 pub trait IExchangeAdapter<TState> {
-    /// Creates (or initialises) the coin/quote pool at `ticks.initial_tick`, adds
-    /// `coin_amount` + `quote_amount` as liquidity over `[lower, upper]`, and returns
-    /// the LP position. The factory transfers the tokens to the adapter before calling
-    /// this; the adapter ends holding the position NFT.
-    fn add_liquidity(
+    /// The factory transfers `coin_supply` of `coin` and `quote_in` of `quote`
+    /// to the adapter before calling. The adapter then, atomically:
+    ///   1. initialises the pool at `ticks.initial_tick`,
+    ///   2. deposits the full `coin_supply` as liquidity over `[lower, upper]`,
+    ///   3. swaps `quote_in` of `quote` for `coin` (the founder buyback) and
+    ///      transfers the bought coins to `creator`,
+    ///   4. transfers the LP position NFT to `creator`.
+    /// Returns the pool id, the position id, and `coins_bought`.
+    fn launch(
         ref self: TState,
         coin: ContractAddress,
         quote: ContractAddress,
-        coin_amount: u256,
-        quote_amount: u256,
+        coin_supply: u256,
+        quote_in: u256,
+        creator: ContractAddress,
         ticks: TickParams,
     ) -> LaunchResult;
-    /// Transfers the position NFT to `to` (the locker).
-    fn transfer_position(ref self: TState, position_id: u256, to: ContractAddress);
-    /// The ERC-721 contract that represents LP positions (so the locker can return it).
+
+    /// The ERC-721 contract that represents LP positions.
     fn position_nft_address(self: @TState) -> ContractAddress;
 }

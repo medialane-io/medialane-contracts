@@ -1,58 +1,60 @@
 # Creator Coin
 
-Permissionless launchpad for **Creator Coins** — a creator deploys their own
-fixed-supply ERC-20 social token and launches it into a **locked-liquidity Ekubo
-pool** with a **capped creator allocation**. Anti-rug by construction; trading
-happens on Ekubo (the coin is a standard ERC-20, tradeable anywhere).
+Permissionless, **non-custodial** launchpad for **Creator Coins** — a creator deploys
+their own fixed-supply ERC-20, keeps a capped founder allocation (≤10%), and the rest
+is deposited as **single-sided liquidity** into an Ekubo pool. The LP position goes to
+the creator. The platform holds nothing, locks nothing. Trading is a standard Ekubo
+swap (the coin is a plain ERC-20, tradeable anywhere).
 
-> **Status:** design/implementation — **12 snforge tests green**, the Ekubo
-> adapter compiles against the live `EkuboProtocol/abis`. **Not yet deployed.**
-> Pending: mainnet-fork test, `cairo-auditor` gate, deploy. See
-> `medialane-core/docs/specs/2026-06-02-creator-coin-launchpad-design.md` and
-> `medialane-core/docs/plans/2026-06-02-creator-coin-contracts.md`.
+This mirrors the battle-tested [`unruggable.meme`](https://github.com/keep-starknet-strange/unruggable.meme)
+Ekubo launch — **no buyback, no swap, no liquidity lock** (unrug's team allocation is a
+direct transfer and its pool liquidity is single-sided; we adopt that and drop its
+permanent lock so the creator keeps control).
+
+> **Status:** implementation — **5 snforge tests green**, the Ekubo adapter compiles
+> against the live `EkuboProtocol/abis`. **Not yet deployed.** Pending: mainnet-fork
+> test, `cairo-auditor` gate, deploy. Model:
+> `medialane-core/docs/specs/2026-06-02-creator-coin-CORRECTED-model.md`.
 
 ## Contracts
 
 | Contract | Responsibility |
 |---|---|
 | `CreatorCoin` | Plain OZ ERC-20, **fixed supply minted once at deploy**, 18 decimals, immutable `creator` for on-chain provenance. Deliberately standard for interoperability. |
-| `CoinFactory` | **Immutable, ownerless, zero-fee, permissionless** factory. `create_coin` mints the full supply to the creator; `launch_on_ekubo` seeds + locks the AMM pool. Enforces the anti-rug guarantees on-chain. |
-| `LiquidityLock` | Custodies the Ekubo LP **position NFT** until `unlock_time`; only the creator may withdraw, and withdraw returns the NFT. |
-| `exchanges::EkuboAdapter` | Concrete `IExchangeAdapter` over Ekubo: builds the `PoolKey`, initialises the pool at the (off-chain-computed) price tick, deposits full-range liquidity via `mint_and_deposit_and_clear_both`, returns the position. |
+| `CoinFactory` | **Immutable, ownerless, zero-fee, permissionless.** One atomic `launch`: deploy the coin (full supply to the factory) → transfer the ≤10% allocation to the creator → deposit the rest as single-sided liquidity → hand the LP position NFT to the creator. Holds nothing afterward. |
+| `exchanges::EkuboAdapter` | Concrete `IExchangeAdapter`: builds the `PoolKey`, initialises the pool at the off-chain price tick, deposits single-sided liquidity via `Positions.mint_and_deposit_and_clear_both`, and transfers the position NFT to the creator. **No swap.** |
 
-The factory talks to the AMM through the `IExchangeAdapter` seam, so the launch
-logic is unit-tested against `MockExchange` and the concrete `EkuboAdapter` is a
-swappable implementation behind it.
+The factory talks to the AMM through the `IExchangeAdapter` seam, so the launch logic
+is unit-tested against `MockExchange` and the concrete `EkuboAdapter` is a swappable
+implementation behind it.
 
-## Anti-rug guarantees (enforced on-chain, `00 §1`)
+## Anti-rug guarantee (enforced on-chain)
 
-- `creator_allocation_bps <= MAX_ALLOCATION_BPS` (1000 = 10%) — the creator keeps
-  at most the cap; the rest seeds the pool.
-- `lock_duration >= MIN_LOCK_DURATION` (180 days) — LP cannot be pulled early.
-- `seed_amount > 0` and the supply invariant `pool + allocation == total_supply`.
+- `creator_allocation_bps <= MAX_ALLOCATION_BPS` (1000 = 10%) — the creator keeps at
+  most 10% (transferred directly); the rest is deposited as liquidity for the market.
+  Nobody — creator included — can corner the supply and dump it.
 
-The quote-token allowlist (STRK/ETH/USDC/wBTC) is **platform-layer**, not on-chain
-— the factory accepts any ERC-20 quote token to stay permissionless (`00 §2`).
+That single cap is the whole on-chain guarantee. There is **no liquidity lock**: the
+creator owns and controls the LP position like any liquidity provider (sell, withdraw),
+with transparency/reputation as the accountability — the platform never holds or locks
+it. The quote-token set (STRK/ETH/USDC/wBTC) is **platform-layer** UI curation, not
+on-chain — the factory accepts any ERC-20 quote token to stay permissionless.
 
 ## Off-chain tick design
 
-All Ekubo tick/price math (the initial price tick and the full-range bounds) is
-computed **off-chain** by the dapp/SDK using Ekubo's SDK and passed into
-`launch_on_ekubo` via `TickParams`. The on-chain adapter therefore carries **no
-log math and no protocol constants**; `core`, `positions`, `fee`, and
+All Ekubo tick/price math (initial price tick + the single-sided range bounds) is
+computed **off-chain** by the dapp/SDK and passed into `launch` via `TickParams`. The
+adapter carries no log math and no protocol constants; `core`, `positions`, `fee`, and
 `tick_spacing` are wired at adapter deploy.
 
 ## Toolchain
 
-This package uses the **modern** Starknet toolchain (pinned in `.tool-versions`):
+Modern Starknet toolchain (pinned in `.tool-versions`):
 
 - scarb **2.18.0**, cairo edition `2024_07`
-- OpenZeppelin Cairo **2.0.0** (exact-pinned `=2.0.0` to avoid `utils` 2.1.0 skew)
+- OpenZeppelin Cairo **2.0.0** (exact-pinned `=2.0.0`)
 - `snforge_std` **0.59.0**
 - `ekubo = { git = "https://github.com/EkuboProtocol/abis" }`
-
-(The older packages in this repo pin scarb ≤ 2.11.4 + `snforge_std_deprecated`;
-that toolchain is being phased out.)
 
 ## Build & test
 
@@ -66,25 +68,24 @@ snforge test
 
 ```
 src/
-  creator_coin.cairo        CreatorCoin ERC-20
-  coin_factory.cairo        CoinFactory (create_coin + launch_on_ekubo)
-  liquidity_lock.cairo      LiquidityLock (NFT custody + time/beneficiary guards)
-  exchanges/ekubo_adapter.cairo   Real Ekubo IExchangeAdapter
-  interfaces/               ICreatorCoin, ICoinFactory, ILiquidityLock, IExchangeAdapter
+  creator_coin.cairo              CreatorCoin ERC-20
+  coin_factory.cairo              CoinFactory (atomic launch: split + single-sided deposit)
+  exchanges/ekubo_adapter.cairo   Real Ekubo IExchangeAdapter (deposit + position to creator)
+  interfaces/                     ICreatorCoin, ICoinFactory, IExchangeAdapter
   events.cairo, types.cairo
-  mocks/                    erc20, erc721, MockExchange (tests)
-tests/tests.cairo           12 unit tests
+  mocks/                          erc20, erc721, MockExchange (tests)
+tests/tests.cairo                 5 unit tests
 ```
 
 ## Key event (for the indexer)
 
-`CoinFactory::CoinLaunched(coin_address, creator, coin_id, quote_token,
-total_supply, creator_allocation_bps, pool_id, lock_expiry, timestamp)` — the
-anchor event the backend projects into a `Collection` (ERC20) + `CoinMarket` row.
+`CoinFactory::CoinLaunched(coin_address, creator, coin_id, quote_token, total_supply,
+creator_allocation_bps, pool_id, timestamp)` — the anchor event the backend projects
+into a `Collection` (ERC20) + `CoinMarket` row.
 
 ## Before mainnet
 
-`unruggable.meme` (the design inspiration) is unaudited and targets an old Cairo;
-this is a clean implementation on the current toolchain, but it has **not** been
-audited. A `cairo-auditor` pass + a mainnet-fork test against live Ekubo are
-required before any deploy.
+`unruggable.meme` (the design inspiration) is unaudited and targets an old Cairo; this
+is a clean implementation on the current toolchain, but it has **not** been audited. A
+`cairo-auditor` pass + a mainnet-fork test against live Ekubo are required before any
+deploy.

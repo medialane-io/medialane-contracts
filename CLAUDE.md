@@ -186,19 +186,22 @@ DROP_START_BLOCK=8341335
 
 ### Creator-Coin (`contracts/Creator-Coin/`)
 
-Permissionless launchpad for **Creator Coins**: a creator deploys a fixed-supply
-ERC-20 and launches it into a **locked-liquidity Ekubo pool** with a **capped
-creator allocation**. Immutable/ownerless factory + per-coin ERC-20 + a liquidity
-locker + an Ekubo adapter. Trading happens on Ekubo (standard ERC-20).
+Permissionless, **non-custodial** launchpad for **Creator Coins**, mirroring unrug's
+proven Ekubo launch: a creator deploys a fixed-supply ERC-20, keeps a capped founder
+allocation (≤10%, direct transfer), and the rest is deposited as **single-sided
+liquidity** on Ekubo with the LP position NFT going to the creator. **No buyback, no
+swap, no liquidity lock** — the platform holds nothing. Trading is a standard Ekubo
+swap (plain ERC-20).
 
-- **Status**: design/implementation — **12 snforge tests green**, Ekubo adapter
-  compiles vs `EkuboProtocol/abis`. **NOT deployed.** Pending: mainnet-fork test,
-  `cairo-auditor` gate, deploy. Branch `feat/creator-coin`.
-- **Contracts**: `CreatorCoin` (ERC-20), `CoinFactory` (`create_coin` +
-  `launch_on_ekubo`, on-chain alloc-cap/min-lock/supply guards), `LiquidityLock`
-  (position-NFT custody), `exchanges::EkuboAdapter`.
-- **Design docs**: `medialane-core/docs/specs/2026-06-02-creator-coin-launchpad-design.md`,
-  `medialane-core/docs/plans/2026-06-02-creator-coin-contracts.md`.
+- **Status**: implementation — **5 snforge tests green**, Ekubo adapter compiles vs
+  `EkuboProtocol/abis`. **NOT deployed.** Pending: mainnet-fork test, `cairo-auditor`
+  gate, deploy. Branch `feat/creator-coin`.
+- **Contracts**: `CreatorCoin` (ERC-20, immutable `creator`), `CoinFactory` (atomic
+  `launch`: deploy → split ≤10% to creator → deposit rest single-sided → LP NFT to
+  creator; on-chain `bps<=1000` cap; ownerless/zero-fee), `exchanges::EkuboAdapter`
+  (init pool + `Positions.mint_and_deposit` + position to creator, no swap).
+- **Model**: `medialane-core/docs/specs/2026-06-02-creator-coin-CORRECTED-model.md`
+  (supersedes the older launchpad-design contract model + the v2 plan's buyback tasks).
 
 > **Toolchain note (modern):** this package uses **scarb 2.18 / OZ 2.0.0 (exact
 > `=2.0.0`) / snforge_std 0.59**, pinned in `contracts/Creator-Coin/.tool-versions`

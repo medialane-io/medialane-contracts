@@ -1,10 +1,10 @@
-/// CoinFactory — permissionless factory for Creator Coins.
+/// CoinFactory — permissionless, ownerless, non-custodial launcher for Creator Coins.
 ///
-/// Anyone can `create_coin` (a fixed-supply ERC-20 minted to them) and then
-/// `launch_on_ekubo` to seed a locked-LP AMM pool. The factory is immutable and
-/// ownerless (no admin, no setters, no fee — 00 §2/§12): the class hash, locker,
-/// and exchange adapter are wired once at deploy. Anti-rug guarantees (capped
-/// creator allocation, minimum lock) are enforced on-chain here.
+/// One atomic `launch`: deploy a fixed-supply ERC-20, deposit the full supply into an
+/// Ekubo pool at the creator-set price, run a <=10% founder buyback paid in the chosen
+/// quote token, and hand the bought coins AND the LP position to the creator. The
+/// platform holds nothing afterward. No admin, no setters, no fee (00 §2/§12). The
+/// <=10% cap is the only on-chain guarantee, enforced as a post-buyback assertion.
 #[starknet::contract]
 pub mod CoinFactory {
     use starknet::{ClassHash, ContractAddress, get_caller_address, get_block_timestamp};
@@ -17,22 +17,16 @@ pub mod CoinFactory {
     use creator_coin::interfaces::IExchangeAdapter::{
         IExchangeAdapterDispatcher, IExchangeAdapterDispatcherTrait, TickParams,
     };
-    use creator_coin::interfaces::ILiquidityLock::{
-        ILiquidityLockDispatcher, ILiquidityLockDispatcherTrait,
-    };
     use creator_coin::types::CoinRecord;
     use creator_coin::events::CoinLaunched;
 
-    /// Creator/team may keep at most 10% of supply; the rest seeds the pool.
+    /// Founder buyback may take at most 10% of supply.
     const MAX_ALLOCATION_BPS: u16 = 1000;
-    /// Liquidity is locked for at least 180 days.
-    const MIN_LOCK_DURATION: u64 = 15_552_000;
     const BPS_DENOMINATOR: u256 = 10000;
 
     #[storage]
     struct Storage {
         creator_coin_class_hash: ClassHash,
-        liquidity_lock: ContractAddress,
         exchange_adapter: ContractAddress,
         last_coin_id: u256,
         coins: Map<u256, CoinRecord>,
@@ -51,26 +45,36 @@ pub mod CoinFactory {
     fn constructor(
         ref self: ContractState,
         creator_coin_class_hash: ClassHash,
-        liquidity_lock: ContractAddress,
         exchange_adapter: ContractAddress,
     ) {
         self.creator_coin_class_hash.write(creator_coin_class_hash);
-        self.liquidity_lock.write(liquidity_lock);
         self.exchange_adapter.write(exchange_adapter);
     }
 
     #[abi(embed_v0)]
     impl CoinFactoryImpl of ICoinFactory<ContractState> {
-        fn create_coin(
-            ref self: ContractState, name: ByteArray, symbol: ByteArray, total_supply: u256,
-        ) -> ContractAddress {
+        fn launch(
+            ref self: ContractState,
+            name: ByteArray,
+            symbol: ByteArray,
+            total_supply: u256,
+            quote_token: ContractAddress,
+            creator_allocation_bps: u16,
+            buyback_quote_amount: u256,
+            ticks: TickParams,
+        ) -> (ContractAddress, felt252) {
             assert(name.len() > 0, 'Name empty');
             assert(total_supply > 0, 'Supply zero');
+            assert(creator_allocation_bps <= MAX_ALLOCATION_BPS, 'Allocation too high');
+
             let creator = get_caller_address();
             let next_id = self.last_coin_id.read() + 1;
 
+            // 1. Deploy the coin; full supply mints to the factory, creator recorded.
+            let factory_addr = starknet::get_contract_address();
             let mut calldata: Array<felt252> = array![];
-            (name.clone(), symbol.clone(), total_supply, creator, creator).serialize(ref calldata);
+            (name.clone(), symbol.clone(), total_supply, factory_addr, creator)
+                .serialize(ref calldata);
             let (coin_address, _) = deploy_syscall(
                 self.creator_coin_class_hash.read(),
                 next_id.try_into().unwrap(),
@@ -79,6 +83,28 @@ pub mod CoinFactory {
             )
                 .unwrap();
 
+            // 2. Move the full supply + the creator's buyback quote to the adapter.
+            let adapter_addr = self.exchange_adapter.read();
+            IERC20Dispatcher { contract_address: coin_address }
+                .transfer(adapter_addr, total_supply);
+            if buyback_quote_amount > 0 {
+                IERC20Dispatcher { contract_address: quote_token }
+                    .transfer_from(creator, adapter_addr, buyback_quote_amount);
+            }
+
+            // 3. Adapter deposits the supply, runs the buyback, and hands the bought
+            //    coins + the LP position to the creator.
+            let adapter = IExchangeAdapterDispatcher { contract_address: adapter_addr };
+            let result = adapter
+                .launch(
+                    coin_address, quote_token, total_supply, buyback_quote_amount, creator, ticks,
+                );
+
+            // 4. Enforce the cap on what the buyback actually delivered.
+            let cap: u256 = total_supply * creator_allocation_bps.into() / BPS_DENOMINATOR;
+            assert(result.coins_bought <= cap, 'Buyback over cap');
+
+            // 5. Record + index + emit.
             self.last_coin_id.write(next_id);
             self.coin_id_of.entry(coin_address).write(next_id);
             self
@@ -89,93 +115,33 @@ pub mod CoinFactory {
                         coin_id: next_id,
                         coin_address,
                         creator,
-                        quote_token: 0.try_into().unwrap(),
+                        quote_token,
                         total_supply,
-                        creator_allocation_bps: 0,
-                        pool_id: 0,
-                        lock_id: 0,
-                        lock_expiry: 0,
+                        creator_allocation_bps,
+                        pool_id: result.pool_id,
                         created_at: get_block_timestamp(),
                     },
                 );
             let idx = self.creator_coin_count.entry(creator).read();
             self.creator_coins.entry((creator, idx)).write(next_id);
             self.creator_coin_count.entry(creator).write(idx + 1);
-            coin_address
-        }
-
-        fn launch_on_ekubo(
-            ref self: ContractState,
-            coin: ContractAddress,
-            quote_token: ContractAddress,
-            creator_allocation_bps: u16,
-            seed_amount: u256,
-            lock_duration: u64,
-            ticks: TickParams,
-        ) -> (felt252, u64) {
-            // ── Guards (anti-rug; 00 §1) ────────────────────────────────────
-            assert(creator_allocation_bps <= MAX_ALLOCATION_BPS, 'Allocation too high');
-            assert(lock_duration >= MIN_LOCK_DURATION, 'Lock too short');
-            assert(seed_amount > 0, 'Seed zero');
-
-            let creator = get_caller_address();
-            let coin_id = self.coin_id_of.entry(coin).read();
-            assert(coin_id != 0, 'Unknown coin');
-            let mut rec = self.coins.entry(coin_id).read();
-            assert(rec.creator == creator, 'Not coin creator');
-            assert(rec.pool_id == 0, 'Already launched');
-
-            // ── Supply split: creator keeps allocation, pool gets the rest ──
-            let creator_allocation: u256 = rec.total_supply
-                * creator_allocation_bps.into()
-                / BPS_DENOMINATOR;
-            let pool_allocation: u256 = rec.total_supply - creator_allocation;
-            assert(pool_allocation + creator_allocation == rec.total_supply, 'Supply invariant');
-
-            let adapter_addr = self.exchange_adapter.read();
-            // Pull pool coins + seed quote from creator into the adapter.
-            IERC20Dispatcher { contract_address: coin }
-                .transfer_from(creator, adapter_addr, pool_allocation);
-            IERC20Dispatcher { contract_address: quote_token }
-                .transfer_from(creator, adapter_addr, seed_amount);
-
-            // Provision liquidity; adapter returns the LP position.
-            let adapter = IExchangeAdapterDispatcher { contract_address: adapter_addr };
-            let result = adapter
-                .add_liquidity(coin, quote_token, pool_allocation, seed_amount, ticks);
-
-            // Move the LP position into the locker and record the lock.
-            let lock_addr = self.liquidity_lock.read();
-            adapter.transfer_position(result.position_id, lock_addr);
-            let nft_address = adapter.position_nft_address();
-            let unlock_time = get_block_timestamp() + lock_duration;
-            let lock_id = ILiquidityLockDispatcher { contract_address: lock_addr }
-                .lock(coin, creator, nft_address, result.position_id, unlock_time);
-
-            // Update record + emit.
-            rec.quote_token = quote_token;
-            rec.creator_allocation_bps = creator_allocation_bps;
-            rec.pool_id = result.pool_id;
-            rec.lock_id = lock_id;
-            rec.lock_expiry = unlock_time;
-            self.coins.entry(coin_id).write(rec.clone());
 
             self
                 .emit(
                     CoinLaunched {
-                        coin_address: coin,
+                        coin_address,
                         creator,
-                        coin_id,
+                        coin_id: next_id,
                         quote_token,
-                        total_supply: rec.total_supply,
+                        total_supply,
                         creator_allocation_bps,
+                        coins_bought: result.coins_bought,
                         pool_id: result.pool_id,
-                        lock_expiry: unlock_time,
                         timestamp: get_block_timestamp(),
                     },
                 );
 
-            (result.pool_id, lock_id)
+            (coin_address, result.pool_id)
         }
 
         fn get_coin(self: @ContractState, coin_id: u256) -> CoinRecord {

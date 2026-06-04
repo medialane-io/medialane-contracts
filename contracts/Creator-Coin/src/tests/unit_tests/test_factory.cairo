@@ -1,0 +1,578 @@
+use core::option::OptionTrait;
+use core::traits::TryInto;
+use ekubo::types::i129::i129;
+use openzeppelin::token::erc20::interface::{ERC20ABIDispatcher, ERC20ABIDispatcherTrait};
+use snforge_std::{
+    declare, ContractClassTrait, start_prank, stop_prank, CheatTarget, start_warp, stop_warp,
+    start_roll, stop_roll, get_class_hash, ContractClass
+};
+use starknet::{ContractAddress, contract_address_const};
+use creator_coin::exchanges::ekubo_adapter::EkuboPoolParameters;
+
+use creator_coin::exchanges::jediswap_adapter::{
+    IJediswapFactory, IJediswapFactoryDispatcher, IJediswapFactoryDispatcherTrait, IJediswapRouter,
+    IJediswapRouterDispatcher, IJediswapRouterDispatcherTrait, IJediswapPairDispatcher,
+    IJediswapPairDispatcherTrait
+};
+use creator_coin::exchanges::{SupportedExchanges};
+use creator_coin::factory::{IFactory, IFactoryDispatcher, IFactoryDispatcherTrait, LaunchParameters};
+use creator_coin::locker::interface::{ILockManagerDispatcher, ILockManagerDispatcherTrait};
+use creator_coin::locker::{LockPosition};
+use creator_coin::tests::addresses::{ETH_ADDRESS, JEDI_FACTORY_ADDRESS};
+use creator_coin::tests::unit_tests::utils::{
+    deploy_jedi_amm_factory_and_router, deploy_creator_coin_factory, deploy_locker, deploy_eth, OWNER, NAME,
+    SYMBOL, DEFAULT_INITIAL_SUPPLY, INITIAL_HOLDERS, INITIAL_HOLDERS_AMOUNTS, SALT,
+    deploy_creator_coin_through_factory, CREATOR_COIN_FACTORY_ADDRESS,
+    deploy_token_from_class_at_address_with_owner, deploy_creator_coin_through_factory_with_owner,
+    pow_256, LOCK_MANAGER_ADDRESS, DEFAULT_MIN_LOCKTIME, deploy_and_launch_creator_coin,
+    TRANSFER_RESTRICTION_DELAY, MAX_PERCENTAGE_BUY_LAUNCH
+};
+use creator_coin::token::interface::{
+    ICreatorCoin, ICreatorCoinDispatcher, ICreatorCoinDispatcherTrait
+};
+use creator_coin::token::creator_coin::{LiquidityType, LiquidityParameters};
+use creator_coin::utils::sum;
+
+
+#[test]
+fn test_locked_liquidity_not_locked() {
+    let owner = snforge_std::test_address();
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory_with_owner(owner);
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+
+    assert(factory.locked_liquidity(creator_coin_address).is_none(), 'liquidty not locked yet');
+}
+
+#[test]
+fn test_locked_liquidity_jediswap() {
+    let (creator_coin, creator_coin_address) = deploy_and_launch_creator_coin();
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+
+    let (locker_address, locked_type) = factory.locked_liquidity(creator_coin_address).unwrap();
+    assert(locker_address == LOCK_MANAGER_ADDRESS(), 'wrong locker address');
+    match locked_type {
+        LiquidityType::JediERC20(_) => (),
+        LiquidityType::StarkDeFiERC20(_) => panic_with_felt252('wrong liquidity type'),
+        LiquidityType::EkuboNFT(_) => panic_with_felt252('wrong liquidity type')
+    }
+}
+
+// Test for ekubo is in fork tests
+
+#[test]
+fn test_exchange_address() {
+    let (_, router_address) = deploy_jedi_amm_factory_and_router();
+    let creator_coin_factory_address = deploy_creator_coin_factory(router_address);
+    let creator_coin_factory = IFactoryDispatcher { contract_address: creator_coin_factory_address };
+
+    let exchange_address = creator_coin_factory.exchange_address(SupportedExchanges::Jediswap);
+    assert(exchange_address == router_address, 'wrong amm router_address');
+}
+
+#[test]
+fn test_is_creator_coin() {
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory();
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+
+    assert(factory.is_creator_coin(address: creator_coin_address), 'should be creator_coin');
+    assert(
+        !factory.is_creator_coin(address: 'random address'.try_into().unwrap()),
+        'should not be creator_coin'
+    );
+}
+
+
+#[test]
+fn test_create_creator_coin() {
+    // Required contracts
+    let (_, router_address) = deploy_jedi_amm_factory_and_router();
+    let creator_coin_factory_address = deploy_creator_coin_factory(router_address);
+    let creator_coin_factory = IFactoryDispatcher { contract_address: creator_coin_factory_address };
+    let (eth, eth_address) = deploy_eth();
+
+    let eth_amount: u256 = eth.total_supply() / 2; // 50% of supply
+
+    start_prank(CheatTarget::One(eth.contract_address), OWNER());
+    eth.approve(creator_coin_factory_address, eth_amount);
+    stop_prank(CheatTarget::One(eth.contract_address));
+
+    start_prank(CheatTarget::One(creator_coin_factory.contract_address), OWNER());
+    let creator_coin_address = creator_coin_factory
+        .create_creator_coin(
+            owner: OWNER(),
+            name: NAME(),
+            symbol: SYMBOL(),
+            initial_supply: DEFAULT_INITIAL_SUPPLY(),
+            contract_address_salt: SALT(),
+        );
+    stop_prank(CheatTarget::One(creator_coin_factory.contract_address));
+
+    let creator_coin = ICreatorCoinDispatcher { contract_address: creator_coin_address };
+
+    assert(creator_coin.name() == NAME(), 'wrong creator_coin name');
+    assert(creator_coin.symbol() == SYMBOL(), 'wrong creator_coin symbol');
+    assert_eq!(creator_coin.balanceOf(creator_coin_factory_address), DEFAULT_INITIAL_SUPPLY(),);
+}
+
+#[test]
+fn test_migrate_creator_coin_from_old_factory() {
+    // Launch
+    let owner = snforge_std::test_address();
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory_with_owner(owner);
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+    let eth = ERC20ABIDispatcher { contract_address: ETH_ADDRESS() };
+    let block_number = 42;
+
+    // approve spending of eth by factory
+    let eth_amount: u256 = 1 * pow_256(10, 18); // 1 ETHER
+    let factory_balance_creator_coin = creator_coin.balanceOf(factory.contract_address);
+    start_prank(CheatTarget::One(eth.contract_address), owner);
+    eth.approve(factory.contract_address, eth_amount);
+    stop_prank(CheatTarget::One(eth.contract_address));
+
+    start_prank(CheatTarget::One(factory.contract_address), owner);
+    start_warp(CheatTarget::One(creator_coin_address), 1);
+    start_roll(CheatTarget::One(creator_coin_address), block_number);
+    let pair_address = factory
+        .launch_on_jediswap(
+            LaunchParameters {
+                creator_coin_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: MAX_PERCENTAGE_BUY_LAUNCH,
+                quote_address: eth.contract_address,
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            eth_amount,
+            DEFAULT_MIN_LOCKTIME,
+        );
+    let (creator_coin_lock_manager, _) = factory.locked_liquidity(creator_coin_address).unwrap();
+    stop_prank(CheatTarget::One(factory.contract_address));
+
+    // New factory
+    let factory_hash = ContractClass { class_hash: get_class_hash(factory.contract_address) };
+    let creator_coin_hash = get_class_hash(creator_coin_address);
+    let mut calldata = array![];
+    let migrated_tokens: Span<(ContractAddress, ContractAddress)> = array![
+        (creator_coin_address, creator_coin_lock_manager)
+    ]
+        .span();
+    let mut amms: Array<(SupportedExchanges, ContractAddress)> = array![];
+    Serde::serialize(@creator_coin_hash, ref calldata);
+    Serde::serialize(@0, ref calldata);
+    Serde::serialize(@amms.into(), ref calldata);
+    Serde::serialize(@migrated_tokens, ref calldata);
+    let new_factory = factory_hash
+        .deploy_at(@calldata, 'new_factory'.try_into().unwrap())
+        .expect('UnrugFactory deployment failed');
+    let new_factory_dispatcher = IFactoryDispatcher { contract_address: new_factory };
+
+    let new_locker_manager = new_factory_dispatcher.lock_manager_address();
+
+    let old_creator_coin_lock_manager = creator_coin_lock_manager;
+    let (new_creator_coin_lock_manager, _) = factory.locked_liquidity(creator_coin_address).unwrap();
+
+    assert!(new_factory_dispatcher.is_creator_coin(creator_coin_address), "should be migrated");
+
+    assert!(new_locker_manager != old_creator_coin_lock_manager, "lockers should be different");
+    assert!(new_creator_coin_lock_manager == old_creator_coin_lock_manager, "locker should be migrated");
+}
+
+#[test]
+fn test_launch_creator_coin_happy_path() {
+    let owner = snforge_std::test_address();
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory_with_owner(owner);
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+    let eth = ERC20ABIDispatcher { contract_address: ETH_ADDRESS() };
+    let block_number = 42;
+
+    // approve spending of eth by factory
+    let eth_amount: u256 = 1 * pow_256(10, 18); // 1 ETHER
+    let factory_balance_creator_coin = creator_coin.balanceOf(factory.contract_address);
+    start_prank(CheatTarget::One(eth.contract_address), owner);
+    eth.approve(factory.contract_address, eth_amount);
+    stop_prank(CheatTarget::One(eth.contract_address));
+
+    start_prank(CheatTarget::One(factory.contract_address), owner);
+    start_warp(CheatTarget::One(creator_coin_address), 1);
+    start_roll(CheatTarget::One(creator_coin_address), block_number);
+    let pair_address = factory
+        .launch_on_jediswap(
+            LaunchParameters {
+                creator_coin_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: MAX_PERCENTAGE_BUY_LAUNCH,
+                quote_address: eth.contract_address,
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            eth_amount,
+            DEFAULT_MIN_LOCKTIME,
+        );
+    stop_prank(CheatTarget::One(factory.contract_address));
+    stop_warp(CheatTarget::One(creator_coin_address));
+    stop_roll(CheatTarget::One(creator_coin_address));
+
+    assert(creator_coin.is_launched(), 'should be launched');
+    assert(creator_coin.launched_at_block_number() == block_number, 'bad block number');
+
+    // Check pair creation
+    let team_allocation = sum(INITIAL_HOLDERS_AMOUNTS());
+    let pair = IJediswapPairDispatcher { contract_address: pair_address };
+    let (token_0_reserves, token_1_reserves, _) = pair.get_reserves();
+    assert(pair.token0() == creator_coin_address, 'wrong token 0 address');
+    assert(pair.token1() == eth.contract_address, 'wrong token 1 address');
+    assert(token_0_reserves == factory_balance_creator_coin - team_allocation, 'wrong pool token reserves');
+    assert(token_1_reserves == eth_amount, 'wrong pool coin reserves');
+    let lp_token = ERC20ABIDispatcher { contract_address: pair_address };
+    assert(lp_token.balanceOf(creator_coin_address) == 0, 'shouldnt have lp tokens');
+
+    // Check token lock
+    let locker = ILockManagerDispatcher { contract_address: LOCK_MANAGER_ADDRESS() };
+    let lock_address = locker.user_lock_at(owner, 0);
+    let token_lock = locker.get_lock_details(lock_address);
+    let expected_lock = LockPosition {
+        token: pair_address,
+        amount: pair.totalSupply() - 1000,
+        unlock_time: starknet::get_block_timestamp() + DEFAULT_MIN_LOCKTIME,
+        owner: owner,
+    };
+    assert(token_lock == expected_lock, 'wrong lock');
+
+    // Check ownership renounced
+    assert(creator_coin.owner().is_zero(), 'Still an owner');
+}
+
+#[test]
+fn test_launch_creator_coin_with_jediswap_parameters() {
+    let owner = snforge_std::test_address();
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory_with_owner(owner);
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+    let eth = ERC20ABIDispatcher { contract_address: ETH_ADDRESS() };
+    let locker = ILockManagerDispatcher { contract_address: LOCK_MANAGER_ADDRESS() };
+
+    // approve spending of eth by factory
+    let eth_amount: u256 = 1 * pow_256(10, 18); // 1 ETHER
+    let factory_balance_creator_coin = creator_coin.balanceOf(factory.contract_address);
+    start_prank(CheatTarget::One(eth.contract_address), owner);
+    eth.approve(factory.contract_address, eth_amount);
+    stop_prank(CheatTarget::One(eth.contract_address));
+
+    start_prank(CheatTarget::One(factory.contract_address), owner);
+    let pair_address = factory
+        .launch_on_jediswap(
+            LaunchParameters {
+                creator_coin_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: MAX_PERCENTAGE_BUY_LAUNCH,
+                quote_address: eth.contract_address,
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            eth_amount,
+            DEFAULT_MIN_LOCKTIME,
+        );
+    stop_prank(CheatTarget::One(factory.contract_address));
+
+    let liquidity_parameters = creator_coin.launched_with_liquidity_parameters().unwrap();
+
+    match liquidity_parameters {
+        LiquidityParameters::Ekubo(_) => panic_with_felt252('wrong liquidity parameters type'),
+        LiquidityParameters::Jediswap((
+            jediswap_liquidity_parameters, lock_position
+        )) => {
+            assert(
+                jediswap_liquidity_parameters.quote_address == eth.contract_address,
+                'Bad quote address'
+            );
+            assert(jediswap_liquidity_parameters.quote_amount == eth_amount, 'Bad quote amount');
+            assert(locker.user_lock_at(owner, 0) == lock_position, 'Bad lock position');
+        },
+        LiquidityParameters::StarkDeFi(_) => panic_with_felt252('wrong liquidity parameters type'),
+    }
+}
+
+#[test]
+fn test_launch_creator_coin_pair_exists_should_succeed() {
+    // Given
+    let owner = snforge_std::test_address();
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory_with_owner(owner);
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+    let eth = ERC20ABIDispatcher { contract_address: ETH_ADDRESS() };
+    let jediswap_factory = IJediswapFactoryDispatcher { contract_address: JEDI_FACTORY_ADDRESS() };
+
+    // When a pair already exists
+    jediswap_factory.create_pair(creator_coin_address, eth.contract_address);
+
+    // Then the launch should be successful
+
+    let eth_amount: u256 = 1 * pow_256(10, 18); // 1 ETHER
+    let factory_balance_creator_coin = creator_coin.balanceOf(factory.contract_address);
+    start_prank(CheatTarget::One(eth.contract_address), owner);
+    eth.approve(factory.contract_address, eth_amount);
+    stop_prank(CheatTarget::One(eth.contract_address));
+
+    start_prank(CheatTarget::One(factory.contract_address), owner);
+    start_warp(CheatTarget::One(creator_coin_address), 1);
+    let pair_address = factory
+        .launch_on_jediswap(
+            LaunchParameters {
+                creator_coin_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: MAX_PERCENTAGE_BUY_LAUNCH,
+                quote_address: eth.contract_address,
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            eth_amount,
+            DEFAULT_MIN_LOCKTIME,
+        );
+    stop_prank(CheatTarget::One(factory.contract_address));
+    stop_warp(CheatTarget::One(creator_coin_address));
+
+    assert(creator_coin.is_launched(), 'should be launched');
+}
+
+
+#[test]
+#[should_panic(expected: ('Already launched',))]
+fn test_launch_creator_coin_already_launched() {
+    let (creator_coin, creator_coin_address) = deploy_and_launch_creator_coin();
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+    let eth = ERC20ABIDispatcher { contract_address: ETH_ADDRESS() };
+
+    // Try to launch again
+    // approve spending of eth by factory
+    let eth_amount: u256 = 1 * pow_256(10, 18); // 1 ETHER
+    let factory_balance_creator_coin = creator_coin.balanceOf(factory.contract_address);
+    start_prank(CheatTarget::One(eth.contract_address), OWNER());
+    eth.approve(factory.contract_address, eth_amount);
+    stop_prank(CheatTarget::One(eth.contract_address));
+
+    start_prank(CheatTarget::One(factory.contract_address), OWNER());
+    let pair_address = factory
+        .launch_on_jediswap(
+            LaunchParameters {
+                creator_coin_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: MAX_PERCENTAGE_BUY_LAUNCH,
+                quote_address: eth.contract_address,
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            eth_amount,
+            DEFAULT_MIN_LOCKTIME,
+        );
+}
+
+
+#[test]
+#[should_panic(expected: ('Token not deployed by factory',))]
+fn test_launch_not_creator_coin_jediswap() {
+    let (eth, eth_address) = deploy_eth();
+    let (other_token, other_token_address) = deploy_token_from_class_at_address_with_owner(
+        OWNER(), 'random'.try_into().unwrap(), eth_address
+    );
+    let (_, router_address) = deploy_jedi_amm_factory_and_router();
+    let factory = IFactoryDispatcher { contract_address: deploy_creator_coin_factory(router_address) };
+
+    // Try to launch again
+    // approve spending of eth by factory
+    let eth_amount: u256 = 1 * pow_256(10, 18); // 1 ETHER
+    let factory_balance_other_token = other_token.balanceOf(factory.contract_address);
+    start_prank(CheatTarget::One(eth.contract_address), OWNER());
+    eth.approve(factory.contract_address, eth_amount);
+    stop_prank(CheatTarget::One(eth.contract_address));
+
+    start_prank(CheatTarget::One(factory.contract_address), OWNER());
+    let pair_address = factory
+        .launch_on_jediswap(
+            LaunchParameters {
+                creator_coin_address: other_token_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: MAX_PERCENTAGE_BUY_LAUNCH,
+                quote_address: eth.contract_address,
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            eth_amount,
+            DEFAULT_MIN_LOCKTIME,
+        );
+}
+
+
+#[test]
+#[should_panic(expected: ('Max percentage buy too low',))]
+fn test_launch_creator_coin_with_percentage_buy_launch_too_low() {
+    let owner = snforge_std::test_address();
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory_with_owner(owner);
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+    let eth = ERC20ABIDispatcher { contract_address: ETH_ADDRESS() };
+
+    // approve spending of eth by factory
+    let eth_amount: u256 = 1 * pow_256(10, 18); // 1 ETHER
+    let factory_balance_creator_coin = creator_coin.balanceOf(factory.contract_address);
+    start_prank(CheatTarget::One(eth.contract_address), owner);
+    eth.approve(factory.contract_address, eth_amount);
+    stop_prank(CheatTarget::One(eth.contract_address));
+
+    start_prank(CheatTarget::One(factory.contract_address), owner);
+    let pair_address = factory
+        .launch_on_jediswap(
+            LaunchParameters {
+                creator_coin_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: 49, // 0.49%
+                quote_address: eth.contract_address,
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            eth_amount,
+            DEFAULT_MIN_LOCKTIME,
+        );
+}
+
+#[test]
+#[should_panic(expected: ('Caller is not the owner',))]
+fn test_launch_creator_coin_not_owner() {
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory();
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+    let pair_address = factory
+        .launch_on_jediswap(
+            LaunchParameters {
+                creator_coin_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: MAX_PERCENTAGE_BUY_LAUNCH,
+                quote_address: ETH_ADDRESS(),
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            1,
+            DEFAULT_MIN_LOCKTIME,
+        );
+}
+
+#[test]
+#[should_panic(expected: ('Quote token is creator_coin',))]
+fn test_launch_creator_coin_quote_creator_coin_jedsiwap() {
+    let owner = snforge_std::test_address();
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory_with_owner(owner);
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+
+    // Create second creator_coin used as quote
+    start_prank(CheatTarget::One(factory.contract_address), owner);
+    let quote_address = factory
+        .create_creator_coin(
+            owner: owner,
+            name: NAME(),
+            symbol: SYMBOL(),
+            initial_supply: DEFAULT_INITIAL_SUPPLY(),
+            contract_address_salt: SALT() + 1,
+        );
+    stop_prank(CheatTarget::One(factory.contract_address));
+    let quote = ERC20ABIDispatcher { contract_address: quote_address }; // actually a creator_coin
+
+    // Try to launch again
+    // approve spending of eth by factory
+    let quote_amount: u256 = 1 * pow_256(10, 18); // 1 ETHER
+    let factory_balance_quote = quote.balanceOf(factory.contract_address);
+    start_prank(CheatTarget::One(quote.contract_address), owner);
+    quote.approve(factory.contract_address, quote_amount);
+    stop_prank(CheatTarget::One(quote.contract_address));
+
+    start_prank(CheatTarget::One(factory.contract_address), owner);
+    let pair_address = factory
+        .launch_on_jediswap(
+            LaunchParameters {
+                creator_coin_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: MAX_PERCENTAGE_BUY_LAUNCH,
+                quote_address: quote.contract_address,
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            quote_amount,
+            DEFAULT_MIN_LOCKTIME,
+        );
+}
+
+#[test]
+#[should_panic(expected: ('Fee too high',))]
+fn test_launch_creator_coin_ekubo_fee_high() {
+    let owner = starknet::get_contract_address();
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory_with_owner(owner);
+    let eth = ERC20ABIDispatcher { contract_address: ETH_ADDRESS() };
+
+    let pool_address = factory
+        .launch_on_ekubo(
+            LaunchParameters {
+                creator_coin_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: MAX_PERCENTAGE_BUY_LAUNCH,
+                quote_address: eth.contract_address,
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            EkuboPoolParameters {
+                fee: 0x5604189374bc6c00000000000000000,
+                tick_spacing: 5982,
+                starting_price: i129 { sign: false, mag: 0 },
+                bound: 0
+            } // Fee : 2.1
+        );
+}
+
+#[test]
+#[should_panic(expected: ('Tick spacing high',))]
+fn test_launch_creator_coin_ekubo_tick_spacing_too_high() {
+    let owner = starknet::get_contract_address();
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory_with_owner(owner);
+    let eth = ERC20ABIDispatcher { contract_address: ETH_ADDRESS() };
+
+    let pool_address = factory
+        .launch_on_ekubo(
+            LaunchParameters {
+                creator_coin_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: MAX_PERCENTAGE_BUY_LAUNCH,
+                quote_address: eth.contract_address,
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            EkuboPoolParameters {
+                fee: 0x51eb851eb851ec00000000000000000,
+                tick_spacing: 19850,
+                starting_price: i129 { sign: false, mag: 0 },
+                bound: 0
+            }
+        );
+}
+
+#[test]
+#[should_panic(expected: ('Tick spacing low',))]
+fn test_launch_creator_coin_ekubo_tick_spacing_too_low() {
+    let owner = starknet::get_contract_address();
+    let factory = IFactoryDispatcher { contract_address: CREATOR_COIN_FACTORY_ADDRESS() };
+    let (creator_coin, creator_coin_address) = deploy_creator_coin_through_factory_with_owner(owner);
+    let eth = ERC20ABIDispatcher { contract_address: ETH_ADDRESS() };
+
+    let pool_address = factory
+        .launch_on_ekubo(
+            LaunchParameters {
+                creator_coin_address,
+                transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
+                max_percentage_buy_launch: MAX_PERCENTAGE_BUY_LAUNCH,
+                quote_address: eth.contract_address,
+                initial_holders: INITIAL_HOLDERS(),
+                initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
+            },
+            EkuboPoolParameters {
+                fee: 0x51eb851eb851ec00000000000000000,
+                tick_spacing: 5900,
+                starting_price: i129 { sign: false, mag: 0 },
+                bound: 0
+            }
+        );
+}

@@ -6,7 +6,7 @@ use crate::core::utils::*;
 
 /// Supported item kinds. The ERC721 venue trades an ERC721 against a payment
 /// (NATIVE STRK or an ERC20). ERC1155 is intentionally NOT supported here — it
-/// has its own venue. (Audit S3/F6.)
+/// has its own venue.
 #[derive(Debug, Drop, Copy, Serde, PartialEq, Hash, starknet::Store)]
 pub enum ItemType {
     #[default]
@@ -41,7 +41,7 @@ impl Felt252TryIntoItemType of TryInto<felt252, ItemType> {
 
 /// A single fixed-price item. `amount` is the quantity (1 for ERC721, the wei
 /// amount for NATIVE/ERC20). There is no separate end_amount — fixed price only
-/// (audit F4: Dutch interpolation lives in the future auction venue).
+/// (Dutch interpolation lives in a future auction venue).
 ///
 /// `identifier_or_criteria` carries the ERC721 `token_id`. Because the order is
 /// SNIP-12 signed, it is a `felt252`: token IDs must fit in a felt (< 2^252).
@@ -78,12 +78,12 @@ impl ConsiderationItemHashImpl of StructHash<ConsiderationItem> {
 }
 
 /// The signed order.
-/// - `marketplace`: binds the order to one deployed contract (audit S1). Asserted
+/// - `marketplace`: binds the order to one deployed contract. Asserted
 ///   `== get_contract_address()` at registration, so a signature for deployment N
 ///   cannot be replayed on deployment N+1.
 /// - `royalty_max_bps`: seller-signed cap on the EIP-2981 royalty paid at fill
-///   (audit F1/F8). The economic split is committed at signing.
-/// - `counter`: the offerer's bulk-cancel epoch (audit F2). An order is only valid
+///   The economic split is committed at signing.
+/// - `counter`: the offerer's bulk-cancel epoch. An order is only valid
 ///   while `counter == get_counter(offerer)`; incrementing it invalidates all the
 ///   offerer's outstanding orders at once. Replaces the sequential nonce.
 /// - `salt`: per-order uniqueness so two economically-identical orders hash
@@ -143,7 +143,7 @@ pub struct CancelRequest {
     pub signature: Array<felt252>,
 }
 
-/// Stored order record. No `fulfiller` field (audit C5) and no nonce.
+/// Stored order record. No `fulfiller` field and no nonce.
 #[derive(Debug, Copy, Drop, Serde, starknet::Store)]
 pub struct OrderDetails {
     pub offerer: ContractAddress,
@@ -153,6 +153,7 @@ pub struct OrderDetails {
     pub start_time: u64,
     pub end_time: u64,
     pub order_status: OrderStatus,
+    pub counter: felt252,
 }
 
 #[derive(Drop, Debug, Copy, Serde, starknet::Store, PartialEq)]
@@ -204,7 +205,7 @@ mod tests {
     #[test]
     fn test_order_hash_binds_marketplace() {
         // Two orders identical except for the marketplace (deployment) they target.
-        // The hash MUST differ, or a signature is replayable across deployments (S1).
+        // The hash MUST differ, or a signature is replayable across deployments.
         let on_deploy_a = sample_order(0xaaa);
         let on_deploy_b = sample_order(0xbbb);
         assert!(

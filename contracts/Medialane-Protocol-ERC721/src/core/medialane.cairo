@@ -1,4 +1,4 @@
-/// Medialane721 — immutable ERC721 marketplace venue (Seaport-style signed orders).
+/// Medialane721 — immutable ERC721 marketplace venue for signed orders.
 ///
 /// Safety model — every check is on-chain and falls in exactly one bucket:
 ///   1. Statically determinable from the signed order → validated at registration,
@@ -9,7 +9,7 @@
 ///      pre-simulated; enforced by atomic revert at fill. Settlement pulls payment
 ///      before delivering the NFT, under a reentrancy guard with CEI.
 ///
-/// No owner/admin/upgrade/pause. A future fix is a fresh declare + deploy.
+/// No owner, admin, upgrade, or pause.
 #[starknet::contract]
 pub mod Medialane721 {
     use openzeppelin_account::interface::{ISRC6Dispatcher, ISRC6DispatcherTrait};
@@ -25,7 +25,7 @@ pub mod Medialane721 {
     use starknet::{
         ContractAddress, get_block_timestamp, get_caller_address, get_contract_address,
     };
-    use core::num::traits::Zero;
+    use core::num::traits::{CheckedMul, Zero};
     use core::panic_with_felt252;
     use crate::core::errors::errors;
     use crate::core::interface::IMedialane;
@@ -60,9 +60,10 @@ pub mod Medialane721 {
         fn name() -> felt252 {
             'Medialane'
         }
-        /// Bumped on every deploy (audit S1). v4 = first redesigned ERC721 venue.
+        /// SNIP-12 domain version. Bumped on every deploy so a signature for one
+        /// deployment cannot be replayed against another.
         fn version() -> felt252 {
-            4
+            5
         }
     }
 
@@ -79,9 +80,9 @@ pub mod Medialane721 {
             let offerer = params.offerer;
 
             assert(!offerer.is_zero(), errors::INVALID_OFFERER);
-            // S1: the order is bound to this exact deployment.
+            // The order is bound to this exact deployment.
             assert(params.marketplace == get_contract_address(), errors::WRONG_MARKETPLACE);
-            // F2: order valid only under the offerer's current bulk-cancel epoch.
+            // Order valid only under the offerer's current bulk-cancel epoch.
             assert(params.counter == self.cancel_counter.read(offerer), errors::INVALID_COUNTER);
             // royalty_max_bps is a percentage in basis points; bound it to [0, 10000]
             // so the cap math at fill cannot overflow and the invariant is explicit.
@@ -90,7 +91,7 @@ pub mod Medialane721 {
                 errors::ROYALTY_BPS_TOO_HIGH,
             );
 
-            // F6/S3: only ERC721 ↔ {NATIVE, ERC20}, both directions.
+            // Only ERC721 ↔ {NATIVE, ERC20}, both directions.
             self._validate_order_shape(params.offer, params.consideration);
 
             let start_time = felt_to_u64(params.start_time);
@@ -109,6 +110,7 @@ pub mod Medialane721 {
                 start_time,
                 end_time,
                 order_status: OrderStatus::Created,
+                counter: params.counter,
             };
             self.orders.write(order_hash, details);
             self.emit(Event::OrderCreated(OrderCreated { order_hash, offerer }));
@@ -119,8 +121,14 @@ pub mod Medialane721 {
 
             let mut details = self._assert_status_created(order_hash);
             let fulfiller = get_caller_address();
-            // F5: no self-dealing / wash trading.
+            // No self-dealing / wash trading.
             assert(fulfiller != details.offerer, errors::SELF_FILL);
+            // Only fulfillable under the offerer's current bulk-cancel epoch; incrementing
+            // the counter invalidates all of the offerer's outstanding orders.
+            assert(
+                details.counter == self.cancel_counter.read(details.offerer),
+                errors::INVALID_COUNTER,
+            );
             self._validate_active_order(details.start_time, details.end_time);
 
             // CEI: persist the terminal state before any external call.
@@ -259,7 +267,7 @@ pub mod Medialane721 {
             assert(amount == 1, errors::INVALID_AMOUNT);
         }
 
-        /// Validates a payment leg. `amount` may be zero (F9: free orders allowed).
+        /// Validates a payment leg. `amount` may be zero (free orders allowed).
         fn _validate_payment_item(
             self: @ContractState,
             item_type: ItemType,
@@ -457,8 +465,12 @@ pub mod Medialane721 {
                 return (zero, 0);
             }
 
-            // Cap at the seller-signed bound (F8).
-            let max_amount = (sale_amount * felt_to_u256(royalty_max_bps)) / BPS_DENOMINATOR;
+            // Cap at the seller-signed bound; overflow-checked so a very large sale_amount
+            // cannot panic by overflow.
+            let max_amount = match sale_amount.checked_mul(felt_to_u256(royalty_max_bps)) {
+                Option::Some(v) => v / BPS_DENOMINATOR,
+                Option::None => panic_with_felt252(errors::PRICE_OVERFLOW),
+            };
             let capped = if raw_amount > max_amount {
                 max_amount
             } else {

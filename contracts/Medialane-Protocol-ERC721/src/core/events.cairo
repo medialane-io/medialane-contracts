@@ -9,7 +9,7 @@ pub struct OrderCreated {
 }
 
 /// Enriched at fill so the indexer has the full economic outcome without a
-/// follow-up `get_order_details` call (audit: match the 1155 venue's event).
+/// follow-up `get_order_details` call.
 #[derive(Drop, starknet::Event)]
 pub struct OrderFulfilled {
     #[key]

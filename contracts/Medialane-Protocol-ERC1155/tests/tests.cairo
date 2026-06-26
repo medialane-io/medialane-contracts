@@ -345,6 +345,34 @@ mod test {
     }
 
     #[test]
+    #[should_panic(expected: 'Invalid counter')]
+    fn test_fulfill_rejects_after_counter_bump() {
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+        // Offerer bulk-cancels by bumping their counter.
+        call_as(env.medialane.contract_address, env.offerer);
+        env.medialane.increment_counter();
+        // The already-registered listing must no longer be fulfillable.
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash, 1);
+    }
+
+    #[test]
+    #[should_panic(expected: 'Invalid counter')]
+    fn test_partial_fill_then_counter_bump_blocks_remainder() {
+        let env = setup();
+        let hash = setup_fulfillable_listing(@env);
+        // Consume one unit; the multi-unit (UNITS) order stays Created.
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash, 1);
+        // Offerer bumps their counter; the remainder must now be blocked.
+        call_as(env.medialane.contract_address, env.offerer);
+        env.medialane.increment_counter();
+        call_as(env.medialane.contract_address, env.fulfiller);
+        env.medialane.fulfill_order(hash, 1);
+    }
+
+    #[test]
     #[should_panic(expected: 'Cannot fill own order')]
     fn test_fulfill_rejects_self_fill() {
         let env = setup();

@@ -1,5 +1,5 @@
-/// Medialane1155 — immutable ERC1155 marketplace venue (Seaport-style signed orders,
-/// with partial fills and per-unit pricing).
+/// Medialane1155 — immutable ERC1155 marketplace venue for signed orders, with
+/// partial fills and per-unit pricing.
 ///
 /// Safety model — every check is on-chain and falls in exactly one bucket:
 ///   1. Statically determinable from the signed order → validated at registration,
@@ -11,7 +11,7 @@
 ///      before delivering the units, under a reentrancy guard with CEI. Per-unit
 ///      pricing (sale = price_per_unit * quantity) is overflow-checked.
 ///
-/// No owner/admin/upgrade/pause. A future fix is a fresh declare + deploy.
+/// No owner, admin, upgrade, or pause.
 #[starknet::contract]
 pub mod Medialane1155 {
     use openzeppelin_account::interface::{ISRC6Dispatcher, ISRC6DispatcherTrait};
@@ -59,9 +59,10 @@ pub mod Medialane1155 {
         fn name() -> felt252 {
             'Medialane'
         }
-        /// Bumped on every deploy (audit S1). v3 = redesigned ERC1155 venue lineage.
+        /// SNIP-12 domain version. Bumped on every deploy so a signature for one
+        /// deployment cannot be replayed against another.
         fn version() -> felt252 {
-            3
+            4
         }
     }
 
@@ -108,6 +109,7 @@ pub mod Medialane1155 {
                 end_time,
                 order_status: OrderStatus::Created,
                 remaining_amount: erc1155_amount,
+                counter: params.counter,
             };
             self.orders.write(order_hash, details);
             self.emit(Event::OrderCreated(OrderCreated { order_hash, offerer }));
@@ -119,6 +121,12 @@ pub mod Medialane1155 {
             let mut details = self._assert_status_created(order_hash);
             let fulfiller = get_caller_address();
             assert(fulfiller != details.offerer, errors::SELF_FILL);
+            // Only fulfillable under the offerer's current bulk-cancel epoch (incl. any
+            // unfilled remainder); incrementing the counter invalidates all outstanding orders.
+            assert(
+                details.counter == self.cancel_counter.read(details.offerer),
+                errors::INVALID_COUNTER,
+            );
             assert(quantity != 0, errors::INVALID_QUANTITY);
 
             let quantity_u256 = felt_to_u256(quantity);
@@ -268,7 +276,7 @@ pub mod Medialane1155 {
             assert(amount != 0, errors::INVALID_AMOUNT);
         }
 
-        /// Payment leg. `amount` may be zero (F9: free orders allowed).
+        /// Payment leg. `amount` may be zero (free orders allowed).
         fn _validate_payment_item(
             self: @ContractState,
             item_type: ItemType,
@@ -345,7 +353,7 @@ pub mod Medialane1155 {
 
         /// Settles `quantity` units. Pulls payment from the payer (royalty first,
         /// then the seller's remainder) and only THEN delivers the ERC1155 units
-        /// (payment-before-delivery, audit R1). Per-unit pricing (audit R3):
+        /// (payment-before-delivery). Per-unit pricing:
         /// sale = price_per_unit * quantity.
         fn _execute_transfers(
             self: @ContractState,
@@ -508,7 +516,11 @@ pub mod Medialane1155 {
                 return (zero, 0);
             }
 
-            let max_amount = (sale_amount * felt_to_u256(royalty_max_bps)) / BPS_DENOMINATOR;
+            // Overflow-checked so a very large sale_amount cannot panic by overflow.
+            let max_amount = match sale_amount.checked_mul(felt_to_u256(royalty_max_bps)) {
+                Option::Some(v) => v / BPS_DENOMINATOR,
+                Option::None => panic_with_felt252(errors::PRICE_OVERFLOW),
+            };
             let capped = if raw_amount > max_amount {
                 max_amount
             } else {

@@ -40,7 +40,7 @@ impl Felt252TryIntoItemType of TryInto<felt252, ItemType> {
 
 /// A single item. For an ERC1155 leg, `amount` is the quantity of units. For a
 /// payment leg, `amount` is the price PER UNIT (sale = price_per_unit * quantity).
-/// No end_amount — fixed price only (audit F4).
+/// No end_amount — fixed price only.
 ///
 /// `identifier_or_criteria` carries the ERC1155 `token_id`. Because the order is
 /// SNIP-12 signed, it is a `felt252`: token IDs must fit in a felt (< 2^252).
@@ -75,8 +75,8 @@ impl ConsiderationItemHashImpl of StructHash<ConsiderationItem> {
     }
 }
 
-/// The signed order. See the 721 venue for the rationale behind `marketplace`
-/// (S1), `royalty_max_bps` (R2), `counter` (F2), and the removal of nonce/end_amount.
+/// The signed order. See the 721 venue for the rationale behind `marketplace`,
+/// `royalty_max_bps`, `counter`, and the removal of nonce/end_amount.
 #[derive(Debug, Drop, Clone, Copy, Serde, Hash)]
 pub struct OrderParameters {
     pub offerer: ContractAddress,
@@ -133,7 +133,7 @@ pub struct CancelRequest {
 }
 
 /// Stored order record. `remaining_amount` tracks unfilled ERC1155 units for
-/// partial fills (audit R4: no redundant total_amount).
+/// partial fills (no redundant total_amount).
 #[derive(Debug, Copy, Drop, Serde, starknet::Store)]
 pub struct OrderDetails {
     pub offerer: ContractAddress,
@@ -144,6 +144,7 @@ pub struct OrderDetails {
     pub end_time: u64,
     pub order_status: OrderStatus,
     pub remaining_amount: felt252,
+    pub counter: felt252,
 }
 
 #[derive(Drop, Debug, Copy, Serde, starknet::Store, PartialEq)]

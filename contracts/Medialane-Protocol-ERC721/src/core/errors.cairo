@@ -35,4 +35,5 @@ pub mod errors {
     pub const ROYALTY_EXCEEDS_SALE: felt252 = 'Royalty exceeds sale';
     pub const ROYALTY_TRANSFER_FAILED: felt252 = 'Royalty transfer failed';
     pub const REENTRANT_CALL: felt252 = 'Reentrant call';
+    pub const PRICE_OVERFLOW: felt252 = 'Price overflow';
 }

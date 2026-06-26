@@ -5,7 +5,7 @@ use crate::core::types::*;
 pub trait IMedialane1155<TState> {
     fn register_order(ref self: TState, order: Order);
     /// Fulfil `quantity` units of an open order. Caller IS the fulfiller — no
-    /// fulfiller signature (audit F3). Partial fills allowed (1 <= quantity <= remaining).
+    /// fulfiller signature. Partial fills allowed (1 <= quantity <= remaining).
     fn fulfill_order(ref self: TState, order_hash: felt252, quantity: felt252);
     fn cancel_order(ref self: TState, cancel_request: CancelRequest);
     fn increment_counter(ref self: TState);

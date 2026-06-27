@@ -86,6 +86,9 @@ trait ICreatorCoinSnake<TState> {
 
 #[starknet::interface]
 trait ICreatorCoinAdditional<TState> {
+    /// Returns the immutable implementation version for this deployed class.
+    fn version(self: @TState) -> ByteArray;
+
     /// Returns whether the creator_coin has been launched.
     ///
     /// # Returns

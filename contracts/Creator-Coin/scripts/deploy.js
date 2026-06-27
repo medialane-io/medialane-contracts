@@ -1,7 +1,5 @@
 import colors from "colors";
-import { deployFactory, deployTokenLocker } from "./libs/contract.js";
-
-const MIN_LOCK_TIME = 15_721_200; // 6 months
+import { deployFactory, deployEkuboLauncher } from "./libs/contract.js";
 
 const main = async () => {
   console.log(`   ____          _         `.red);
@@ -10,13 +8,13 @@ const main = async () => {
   console.log(`  |____/|___|  _|_|___|_  |`.red);
   console.log(`            |_|       |___|`.red);
 
-  // Token Locker
-  console.log(`\n${"Deploying TokenLocker contract".blue}`);
-  await deployTokenLocker(MIN_LOCK_TIME);
+  // EkuboLauncher (holds the locked LP position; the Factory's only exchange)
+  console.log(`\n${"Deploying EkuboLauncher contract".blue}`);
+  const ekuboLauncherAddress = await deployEkuboLauncher();
 
   // Factory
   console.log(`\n${"Deploying Factory contract".blue}`);
-  await deployFactory();
+  await deployFactory(ekuboLauncherAddress);
 };
 
 main();

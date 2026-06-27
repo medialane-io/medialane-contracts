@@ -1,5 +1,4 @@
 use core::traits::TryInto;
-use debug::PrintTrait;
 use openzeppelin::token::erc20::interface::{ERC20ABIDispatcher, ERC20ABIDispatcherTrait};
 use snforge_std::{
     declare, ContractClassTrait, start_prank, stop_prank, start_spoof, CheatTarget, TxInfoMock,
@@ -9,12 +8,11 @@ use starknet::ContractAddress;
 use creator_coin::exchanges::SupportedExchanges;
 use creator_coin::factory::interface::{IFactoryDispatcher, IFactoryDispatcherTrait};
 use creator_coin::tests::addresses::{
-    JEDI_FACTORY_ADDRESS, JEDI_ROUTER_ADDRESS, EKUBO_CORE, EKUBO_POSITIONS, EKUBO_REGISTRY,
-    ETH_ADDRESS, EKUBO_ROUTER, STARKDEFI_ROUTER_ADDRESS
+    EKUBO_CORE, EKUBO_POSITIONS, EKUBO_REGISTRY, ETH_ADDRESS, EKUBO_ROUTER, TOKEN0_ADDRESS
 };
 use creator_coin::tests::unit_tests::utils::{
-    deploy_locker, deploy_eth_with_owner, NAME, SYMBOL, DEFAULT_INITIAL_SUPPLY, INITIAL_HOLDERS,
-    INITIAL_HOLDERS_AMOUNTS, SALT, DefaultTxInfoMock, OWNER, TOKEN0_ADDRESS, CREATOR_COIN_FACTORY_ADDRESS,
+    deploy_eth_with_owner, NAME, SYMBOL, DEFAULT_INITIAL_SUPPLY, INITIAL_HOLDERS,
+    INITIAL_HOLDERS_AMOUNTS, SALT, DefaultTxInfoMock, OWNER, CREATOR_COIN_FACTORY_ADDRESS,
     ETH_INITIAL_SUPPLY
 };
 use creator_coin::token::interface::{
@@ -62,17 +60,15 @@ fn deploy_ekubo_launcher() -> ContractAddress {
 }
 
 // CreatorCoinFactory
-fn deploy_creator_coin_factory(exchanges: Span<(SupportedExchanges, ContractAddress)>) -> ContractAddress {
+fn deploy_creator_coin_factory(
+    exchanges: Span<(SupportedExchanges, ContractAddress)>
+) -> ContractAddress {
     let creator_coin_class_hash = declare('CreatorCoin').class_hash;
-    let lock_manager_address = deploy_locker();
 
     let contract = declare('Factory');
     let mut calldata = array![];
-    let migrated_tokens: Span<ContractAddress> = array![].span();
     Serde::serialize(@creator_coin_class_hash, ref calldata);
-    Serde::serialize(@lock_manager_address, ref calldata);
     Serde::serialize(@exchanges.into(), ref calldata);
-    Serde::serialize(@migrated_tokens, ref calldata);
     contract.deploy_at(@calldata, CREATOR_COIN_FACTORY_ADDRESS()).expect('Factory deployment failed')
 }
 
@@ -80,18 +76,11 @@ fn deploy_creator_coin_factory(exchanges: Span<(SupportedExchanges, ContractAddr
 /// Sends 50% of the ETH supply to the creator_coin.
 /// The effective price upon launch will be 1 ETH = 2 CREATOR_COIN
 /// Given that the entire supply of CREATOR_COIN is LPed
-//! Warning: Since these tests support ekubo, the deployment of the creator_coin factory is done with support for ekubo
-//! and we shoulnd't use the function from the unit tests.
 fn deploy_creator_coin_through_factory_with_owner(
     owner: ContractAddress
 ) -> (ICreatorCoinDispatcher, ContractAddress) {
     let ekubo_launchpad = deploy_ekubo_launcher();
-    let supported_exchanges = array![
-        (SupportedExchanges::Jediswap, JEDI_ROUTER_ADDRESS()),
-        (SupportedExchanges::Ekubo, ekubo_launchpad),
-        (SupportedExchanges::Starkdefi, STARKDEFI_ROUTER_ADDRESS()),
-    ]
-        .span();
+    let supported_exchanges = array![(SupportedExchanges::Ekubo, ekubo_launchpad),].span();
     let creator_coin_factory_address = deploy_creator_coin_factory(supported_exchanges);
     let creator_coin_factory = IFactoryDispatcher { contract_address: creator_coin_factory_address };
 
@@ -106,11 +95,7 @@ fn deploy_creator_coin_through_factory_with_owner(
         );
     stop_prank(CheatTarget::One(creator_coin_factory.contract_address));
 
-    // Upon deployment, we mock the transaction_hash of the current tx.
-    // This is because for each tx, we check during transfers whether a transfer already
-    // occurred in the same tx. Rather than adding these lines in each test, we make it a default.
     let mut tx_info: TxInfoMock = Default::default();
-    tx_info.transaction_hash = Option::Some(1234);
     tx_info.account_contract_address = Option::Some(snforge_std::test_address());
     start_spoof(CheatTarget::One(creator_coin_address), tx_info);
 

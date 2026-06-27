@@ -1,10 +1,11 @@
 # Creator Coin contracts
 
 Permissionless launchpad contracts for **Creator Coins** on Starknet: a fixed-supply
-ERC-20 token plus a fully automated, **locked-liquidity** launch on Ekubo (and Jediswap).
+ERC-20 token plus a fully automated, **locked-liquidity** launch on Ekubo.
 
 Forked from Keep Starknet Strange's audited launchpad framework (see [LICENSE](LICENSE)).
-The protocol mechanics are preserved verbatim; only the naming is Medialane's.
+Medialane's build reduces the framework to an Ekubo-only launch and adds on-chain
+versioning; the core launch mechanics are otherwise preserved.
 
 ## Overview
 
@@ -15,10 +16,10 @@ A Creator Coin is created in two steps.
    framework functions:
    - `is_launched` — whether the coin has been launched yet.
    - `get_team_allocation` — the amount of tokens allocated to the team.
-   - `liquidity_type` — the liquidity backing the coin: an NFT position on Ekubo, or an
-     ERC-20 pair on a UniV2-style AMM.
+   - `liquidity_type` — the liquidity backing the coin: an NFT position on Ekubo.
+   - `version` — the immutable on-chain implementation version of the deployed class.
 
-2. **Launch** the coin on the chosen exchange (Ekubo or Jediswap); the process is fully
+2. **Launch** the coin on Ekubo; the process is fully
    automated. At launch the creator provides:
    - The address of the coin to launch.
    - The duration of transfer restrictions (which cap the percentage of total supply
@@ -43,11 +44,6 @@ A Creator Coin is created in two steps.
      is locked** — and pool fees are withdrawable by the coin's owner through
      `EkuboLauncher`.
 
-- **Jediswap:** the creator supplies an amount of quote liquidity (e.g. ETH or STRK) and
-  an unlock time. The amount supplied at launch sets the initial price (and marketcap),
-  and the minted LP position is transferred to a locker for a minimum of 6 months
-  (parametrizable at launch).
-
 ## Structure
 
 ### Contracts
@@ -56,10 +52,6 @@ A Creator Coin is created in two steps.
   entrypoint for every interaction with the framework.
 - **CreatorCoin** (`src/token/creator_coin.cairo`) — the ERC-20 token, deployed by the
   factory, with the extra framework functions above.
-- **Lock manager** (`src/locker/lock_manager.cairo`) — locks ERC-20 tokens (including
-  tokens with an increasing `balanceOf`) for a period. Each lock deploys a dedicated
-  holder contract, released after the lock period; all interactions go through
-  `LockManager`.
 - **EkuboLauncher** (`src/exchanges/ekubo/launcher.cairo`) — automates the Ekubo launch
   (create the pool, add liquidity, hold the minted position) and lets coin owners
   withdraw the fees earned by the pool.
@@ -70,8 +62,8 @@ A Creator Coin is created in two steps.
 
 - `fork_tests/` — run against a fork of Starknet mainnet, used to exercise the contracts
   in a real environment (primarily the Ekubo interactions).
-- `unit_tests/` — local isolation tests covering all contracts and their interactions,
-  including the Jediswap flow (deployed locally).
+- `unit_tests/` — local isolation tests covering the token, the factory, and launch
+  parameter validation (no RPC required).
 
 ## 🛠️ Build
 

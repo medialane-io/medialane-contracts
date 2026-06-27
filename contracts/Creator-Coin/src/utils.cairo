@@ -24,24 +24,6 @@ impl ContractAddressOrder of PartialOrd<ContractAddress> {
     }
 }
 
-fn unique_count<T, +Copy<T>, +Drop<T>, +PartialEq<T>>(mut self: Span<T>) -> u32 {
-    let mut counter = 0;
-    let mut result: Array<T> = array![];
-    loop {
-        match self.pop_front() {
-            Option::Some(value) => {
-                if contains(result.span(), *value) {
-                    continue;
-                }
-                result.append(*value);
-                counter += 1;
-            },
-            Option::None => { break; }
-        }
-    };
-    counter
-}
-
 fn sum<T, +Copy<T>, +Drop<T>, +PartialEq<T>, +Zero<T>, +AddEq<T>>(mut self: Span<T>) -> T {
     let mut result = Zero::zero();
     loop {
@@ -51,17 +33,6 @@ fn sum<T, +Copy<T>, +Drop<T>, +PartialEq<T>, +Zero<T>, +AddEq<T>>(mut self: Span
         }
     };
     result
-}
-
-fn contains<T, +Copy<T>, +Drop<T>, +PartialEq<T>>(mut self: Span<T>, value: T) -> bool {
-    loop {
-        match self.pop_front() {
-            Option::Some(current) => { if *current == value {
-                break true;
-            } },
-            Option::None => { break false; }
-        }
-    }
 }
 
 fn sort_tokens(

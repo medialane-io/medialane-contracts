@@ -8,7 +8,7 @@ use snforge_std::{
 use starknet::{ContractAddress, contract_address_const};
 use creator_coin::exchanges::{SupportedExchanges};
 use creator_coin::tests::unit_tests::utils::{
-    OWNER, NAME, SYMBOL, DEFAULT_INITIAL_SUPPLY, RECIPIENT, SPENDER, deploy_locker, INITIAL_HOLDERS,
+    OWNER, NAME, SYMBOL, DEFAULT_INITIAL_SUPPLY, RECIPIENT, SPENDER, INITIAL_HOLDERS,
     INITIAL_HOLDERS_AMOUNTS, TRANSFER_RESTRICTION_DELAY, DefaultTxInfoMock,
     deploy_standalone_creator_coin
 };
@@ -23,8 +23,7 @@ mod erc20_metadata {
     use snforge_std::{declare, ContractClassTrait, start_prank, stop_prank, CheatTarget};
     use starknet::{ContractAddress, contract_address_const};
     use super::{
-        deploy_standalone_creator_coin, OWNER, NAME, SYMBOL, DEFAULT_INITIAL_SUPPLY, RECIPIENT, SPENDER,
-        deploy_locker
+        deploy_standalone_creator_coin, OWNER, NAME, SYMBOL, DEFAULT_INITIAL_SUPPLY, RECIPIENT, SPENDER
     };
     use creator_coin::token::interface::{
         ICreatorCoinDispatcher, ICreatorCoinDispatcherTrait
@@ -60,7 +59,7 @@ mod erc20_entrypoints {
     use starknet::{ContractAddress, contract_address_const};
     use super::{
         deploy_standalone_creator_coin, OWNER, NAME, SYMBOL, DEFAULT_INITIAL_SUPPLY, RECIPIENT, SPENDER,
-        deploy_locker, INITIAL_HOLDERS, DefaultTxInfoMock, INITIAL_HOLDERS_AMOUNTS
+        INITIAL_HOLDERS, DefaultTxInfoMock, INITIAL_HOLDERS_AMOUNTS
     };
     use creator_coin::token::interface::{
         ICreatorCoinDispatcher, ICreatorCoinDispatcherTrait

@@ -41,6 +41,9 @@ struct EkuboLP {
 
 #[starknet::interface]
 trait IEkuboLauncher<T> {
+    /// Returns the immutable implementation version for this deployed class.
+    fn version(self: @T) -> ByteArray;
+
     /// Launches a new token.
     ///
     /// This function calls the core contract with a callback to deposit and mint
@@ -156,7 +159,6 @@ trait IEkuboLauncher<T> {
 mod EkuboLauncher {
     use alexandria_storage::list::{List, ListTrait};
     use core::traits::Destruct;
-    use debug::PrintTrait;
     use ekubo::components::clear::{IClearDispatcher, IClearDispatcherTrait};
     use ekubo::components::shared_locker::{call_core_with_callback, consume_callback_data};
     use ekubo::interfaces::core::{ICoreDispatcher, ICoreDispatcherTrait, ILocker};
@@ -249,6 +251,10 @@ mod EkuboLauncher {
 
     #[external(v0)]
     impl EkuboLauncherImpl of IEkuboLauncher<ContractState> {
+        fn version(self: @ContractState) -> ByteArray {
+            "0.2.0"
+        }
+
         fn launch_token(ref self: ContractState, params: EkuboLaunchParameters) -> (u64, EkuboLP) {
             // Register the token in Ekubo Registry
             let registry = self.registry.read();
@@ -484,10 +490,6 @@ mod EkuboLauncher {
                             liquidity_for_team,
                             single_tick_bound
                         );
-
-                    let ekubo_router = self.router.read();
-                    // let market_depth = ekubo_router
-                    //     .get_market_depth(pool_key, 985392111309755760868507187842908160);
 
                     // 2. Provide the liquidity to actually initialize the public pool with
                     // The pool bounds must be set according to the tick spacing.

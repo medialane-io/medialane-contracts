@@ -5,8 +5,6 @@ use creator_coin::exchanges::ekubo_adapter::EkuboPoolParameters;
 
 #[derive(Copy, Drop, starknet::Store, Serde)]
 enum LiquidityType {
-    JediERC20: ContractAddress,
-    StarkDeFiERC20: ContractAddress,
     EkuboNFT: u64
 }
 
@@ -17,22 +15,8 @@ struct EkuboLiquidityParameters {
 }
 
 #[derive(Copy, Drop, starknet::Store, Serde)]
-struct JediswapLiquidityParameters {
-    quote_address: ContractAddress,
-    quote_amount: u256,
-}
-
-#[derive(Copy, Drop, starknet::Store, Serde)]
-struct StarkDeFiLiquidityParameters {
-    quote_address: ContractAddress,
-    quote_amount: u256,
-}
-
-#[derive(Copy, Drop, starknet::Store, Serde)]
 enum LiquidityParameters {
     Ekubo: EkuboLiquidityParameters,
-    Jediswap: (JediswapLiquidityParameters, ContractAddress),
-    StarkDeFi: (StarkDeFiLiquidityParameters, ContractAddress),
 }
 
 #[starknet::contract]
@@ -40,7 +24,6 @@ mod CreatorCoin {
     use core::box::BoxTrait;
     use core::traits::TryInto;
     use core::zeroable::Zeroable;
-    use debug::PrintTrait;
     use integer::BoundedInt;
     use openzeppelin::access::ownable::OwnableComponent;
     use openzeppelin::access::ownable::interface::IOwnable;
@@ -52,19 +35,13 @@ mod CreatorCoin {
         IERC20, IERC20Metadata, ERC20ABIDispatcher, ERC20ABIDispatcherTrait
     };
     use starknet::{
-        ContractAddress, contract_address_const, get_caller_address, get_tx_info,
+        ContractAddress, contract_address_const, get_caller_address,
         get_block_timestamp, get_block_info
     };
     use super::{LiquidityType, LiquidityParameters};
 
     use creator_coin::errors;
-    use creator_coin::exchanges::jediswap_adapter::{
-        IJediswapFactoryDispatcher, IJediswapFactoryDispatcherTrait, IJediswapRouterDispatcher,
-        IJediswapRouterDispatcherTrait
-    };
-    use creator_coin::exchanges::{SupportedExchanges};
     use creator_coin::factory::{IFactory, IFactoryDispatcher, IFactoryDispatcherTrait};
-    use creator_coin::locker::{ILockManagerDispatcher, ILockManagerDispatcherTrait};
     use creator_coin::token::interface::{
         ICreatorCoinSnake, ICreatorCoinCamel, ICreatorCoinAdditional
     };
@@ -87,9 +64,7 @@ mod CreatorCoin {
 
     #[storage]
     struct Storage {
-        marker_v_0: (),
         team_allocation: u256,
-        tx_hash_tracker: LegacyMap<ContractAddress, felt252>,
         transfer_restriction_delay: u64,
         launch_time: u64,
         launch_block_number: u64,
@@ -142,6 +117,10 @@ mod CreatorCoin {
 
     #[abi(embed_v0)]
     impl AdditionalEntrypoints of ICreatorCoinAdditional<ContractState> {
+        fn version(self: @ContractState) -> ByteArray {
+            "0.2.0"
+        }
+
         fn is_launched(self: @ContractState) -> bool {
             self.launch_time.read().is_non_zero()
         }
@@ -297,9 +276,9 @@ mod CreatorCoin {
             recipient: ContractAddress,
             amount: u256
         ) {
-            // When we launch on jediswap on the factory, we invoke the add_liquidity() of the router,
-            // which performs a transferFrom() to send the tokens to the pool.
-            // Therefore, we need to bypass this validation if the sender is the factory contract.
+            // At launch the factory moves the supply into the Ekubo position and
+            // distributes the team allocation, so transfers from the factory bypass
+            // the restrictions.
             if sender != self.factory_contract.read() {
                 self.apply_transfer_restrictions(sender, recipient, amount)
             }
@@ -307,12 +286,10 @@ mod CreatorCoin {
         }
 
         /// Applies the relevant transfer restrictions, if the timing for restrictions has not elapsed yet.
-        /// - Before launch, the number of holders and their allocation does not exceed the maximum allowed.
-        /// - After launch, the transfer amount does not exceed a certain percentage of the total supply.
-        /// and the recipient has not already received tokens in the current transaction.
+        /// After launch, the transfer amount must not exceed a certain percentage of the total supply.
         ///
-        /// By returning early if the transaction performed is not a direct buy from the pair / ekubo core,
-        /// we ensure that the restrictions only trigger once, when the coin is moved from pools.
+        /// By returning early if the transaction performed is not a direct buy from ekubo core,
+        /// we ensure that the restrictions only trigger once, when the coin is moved from the pool.
         /// As such, this keeps compatibility with aggregators and routers that perform multiple transfers
         /// when swapping tokens.
         ///
@@ -331,26 +308,14 @@ mod CreatorCoin {
                 return;
             }
 
-            //TODO(audit): shouldnt ever happen since factory has all the supply
+            // Not launched yet: the factory holds the entire supply, so there is
+            // nothing to restrict.
             if !self.is_launched() {
                 return;
             }
             // Safe unwrap as we already checked that the coin is launched,
             // thus the liquidity type is not none.
             match self.liquidity_type.read().unwrap() {
-                LiquidityType::JediERC20(pair) => {
-                    if (get_caller_address() != pair) {
-                        // When buying from jediswap, the caller_address is the pair,
-                        // so we return early if the caller is not the pair to not apply restrictions.
-                        return;
-                    }
-                },
-                LiquidityType::StarkDeFiERC20(pair) => {
-                    if (get_caller_address() != pair) {
-                        // same as above
-                        return;
-                    }
-                },
                 LiquidityType::EkuboNFT(_) => {
                     let factory = IFactoryDispatcher {
                         contract_address: self.factory_contract.read()

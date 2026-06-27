@@ -1,4 +1,3 @@
-use core::debug::PrintTrait;
 use core::traits::TryInto;
 use ekubo::components::clear::{IClearDispatcher, IClearDispatcherTrait};
 use ekubo::interfaces::core::{ICoreDispatcher, ICoreDispatcherTrait};
@@ -20,19 +19,17 @@ use creator_coin::exchanges::ekubo::launcher::{
 };
 use creator_coin::exchanges::ekubo_adapter::EkuboPoolParameters;
 use creator_coin::factory::{IFactoryDispatcher, IFactoryDispatcherTrait, Factory, LaunchParameters};
-use creator_coin::locker::LockPosition;
-use creator_coin::locker::interface::{ILockManagerDispatcher, ILockManagerDispatcherTrait};
 use creator_coin::tests::addresses::{EKUBO_CORE};
 use creator_coin::tests::fork_tests::utils::{
     deploy_creator_coin_through_factory_with_owner, sort_tokens, EKUBO_LAUNCHER_ADDRESS,
-    EKUBO_ROUTER_ADDRESS, deploy_token0_with_owner, deploy_eth_with_owner
+    EKUBO_ROUTER_ADDRESS, deploy_token0_with_owner, deploy_eth_with_owner, deploy_ekubo_launcher,
+    deploy_creator_coin_factory
 };
 use creator_coin::tests::unit_tests::utils::{
-    OWNER, DEFAULT_MIN_LOCKTIME, pow_256, LOCK_MANAGER_ADDRESS, CREATOR_COIN_FACTORY_ADDRESS, RECIPIENT,
-    JEDI_ROUTER_ADDRESS, ALICE, DefaultTxInfoMock, TRANSFER_RESTRICTION_DELAY,
+    OWNER, pow_256, CREATOR_COIN_FACTORY_ADDRESS, RECIPIENT,
+    ALICE, DefaultTxInfoMock, TRANSFER_RESTRICTION_DELAY,
     MAX_PERCENTAGE_BUY_LAUNCH, NAME, SYMBOL, INITIAL_HOLDERS, INITIAL_HOLDERS_AMOUNTS,
-    DEFAULT_INITIAL_SUPPLY, SALT, deploy_token_from_class_at_address_with_owner,
-    deploy_jedi_amm_factory_and_router, deploy_creator_coin_factory
+    DEFAULT_INITIAL_SUPPLY, SALT, deploy_token_from_class_at_address_with_owner
 };
 use creator_coin::token::interface::{
     ICreatorCoinDispatcher, ICreatorCoinDispatcherTrait
@@ -195,8 +192,6 @@ fn test_locked_liquidity_ekubo() {
     let (locker_address, locked_type) = factory.locked_liquidity(creator_coin_address).unwrap();
     assert(locker_address == EKUBO_LAUNCHER_ADDRESS(), 'wrong locker address');
     match locked_type {
-        LiquidityType::JediERC20(_) => panic_with_felt252('wrong liquidity type'),
-        LiquidityType::StarkDeFiERC20(_) => panic_with_felt252('wrong liquidity type'),
         LiquidityType::EkuboNFT(id) => ()
     }
 }
@@ -292,12 +287,6 @@ fn test_launch_creator_coin() {
                 'Bad ekubo bound'
             );
         },
-        LiquidityParameters::Jediswap(jediswap_liquidity_parameters) => panic_with_felt252(
-            'wrong liquidity parameters type'
-        ),
-        LiquidityParameters::StarkDeFi(stark_defi_liquidity_parameters) => panic_with_felt252(
-            'wrong liquidity parameters type'
-        )
     }
 
     // Check events
@@ -815,8 +804,11 @@ fn test_launch_not_creator_coin_ekubo() {
     );
     let starting_price = i129 { sign: true, mag: 4600158 }; // 0.01ETH/CREATOR_COIN
 
+    let ekubo_launchpad = deploy_ekubo_launcher();
     let factory = IFactoryDispatcher {
-        contract_address: deploy_creator_coin_factory(JEDI_ROUTER_ADDRESS())
+        contract_address: deploy_creator_coin_factory(
+            array![(SupportedExchanges::Ekubo, ekubo_launchpad)].span()
+        )
     };
     let ekubo_launcher = IEkuboLauncherDispatcher { contract_address: EKUBO_LAUNCHER_ADDRESS() };
     start_prank(CheatTarget::One(factory.contract_address), owner);
@@ -872,7 +864,7 @@ fn test_launch_creator_coin_quote_creator_coin_ekubo() {
 
     start_prank(CheatTarget::One(factory.contract_address), owner);
     let pair_address = factory
-        .launch_on_jediswap(
+        .launch_on_ekubo(
             LaunchParameters {
                 creator_coin_address,
                 transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
@@ -881,8 +873,12 @@ fn test_launch_creator_coin_quote_creator_coin_ekubo() {
                 initial_holders: INITIAL_HOLDERS(),
                 initial_holders_amounts: INITIAL_HOLDERS_AMOUNTS(),
             },
-            quote_amount,
-            DEFAULT_MIN_LOCKTIME,
+            EkuboPoolParameters {
+                fee: 0x51eb851eb851ec00000000000000000,
+                tick_spacing: 5982,
+                starting_price: i129 { sign: false, mag: 1 },
+                bound: 88712960
+            }
         );
 }
 
@@ -904,7 +900,7 @@ fn test_launch_creator_coin_ekubo_initial_holders_len_mismatch() {
 
     start_prank(CheatTarget::One(factory.contract_address), owner);
     let pair_address = factory
-        .launch_on_jediswap(
+        .launch_on_ekubo(
             LaunchParameters {
                 creator_coin_address,
                 transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
@@ -916,8 +912,12 @@ fn test_launch_creator_coin_ekubo_initial_holders_len_mismatch() {
                     .span(),
                 initial_holders_amounts: array![50_u256, 20_u256, 10_u256].span(),
             },
-            quote_amount,
-            DEFAULT_MIN_LOCKTIME,
+            EkuboPoolParameters {
+                fee: 0x51eb851eb851ec00000000000000000,
+                tick_spacing: 5982,
+                starting_price: i129 { sign: false, mag: 1 },
+                bound: 88712960
+            }
         );
 }
 
@@ -954,7 +954,7 @@ fn test_launch_creator_coin_ekubo_max_holders_reached() {
 
     start_prank(CheatTarget::One(factory.contract_address), owner);
     let pair_address = factory
-        .launch_on_jediswap(
+        .launch_on_ekubo(
             LaunchParameters {
                 creator_coin_address,
                 transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
@@ -963,8 +963,12 @@ fn test_launch_creator_coin_ekubo_max_holders_reached() {
                 initial_holders: initial_holders.span(),
                 initial_holders_amounts: initial_holders_amounts.span(),
             },
-            quote_amount,
-            DEFAULT_MIN_LOCKTIME,
+            EkuboPoolParameters {
+                fee: 0x51eb851eb851ec00000000000000000,
+                tick_spacing: 5982,
+                starting_price: i129 { sign: false, mag: 1 },
+                bound: 88712960
+            }
         );
 }
 
@@ -989,7 +993,7 @@ fn test_launch_creator_coin_ekubo_too_much_team_alloc() {
 
     start_prank(CheatTarget::One(factory.contract_address), owner);
     let pair_address = factory
-        .launch_on_jediswap(
+        .launch_on_ekubo(
             LaunchParameters {
                 creator_coin_address,
                 transfer_restriction_delay: TRANSFER_RESTRICTION_DELAY,
@@ -1001,7 +1005,11 @@ fn test_launch_creator_coin_ekubo_too_much_team_alloc() {
                     .span(),
                 initial_holders_amounts: array![alloc_holder_1, alloc_holder_2].span(),
             },
-            quote_amount,
-            DEFAULT_MIN_LOCKTIME,
+            EkuboPoolParameters {
+                fee: 0x51eb851eb851ec00000000000000000,
+                tick_spacing: 5982,
+                starting_price: i129 { sign: false, mag: 1 },
+                bound: 88712960
+            }
         );
 }

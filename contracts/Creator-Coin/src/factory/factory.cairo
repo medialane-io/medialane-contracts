@@ -21,20 +21,17 @@ mod Factory {
         IEkuboLauncherDispatcher, IEkuboLauncherDispatcherTrait
     };
     use creator_coin::exchanges::{
-        SupportedExchanges, ekubo_adapter, ekubo_adapter::EkuboPoolParameters, jediswap_adapter,
-        jediswap_adapter::JediswapAdditionalParameters, ekubo::launcher::EkuboLP, starkdefi_adapter,
-        starkdefi::interfaces::StarkDeFiAdditionalParameters
+        SupportedExchanges, ekubo_adapter, ekubo_adapter::EkuboPoolParameters,
+        ekubo::launcher::EkuboLP
     };
     use creator_coin::factory::{IFactory, LaunchParameters};
     use creator_coin::token::interface::{
         ICreatorCoinDispatcher, ICreatorCoinDispatcherTrait
     };
     use creator_coin::token::creator_coin::{
-        CreatorCoin::LiquidityType, CreatorCoin::LiquidityParameters,
-        JediswapLiquidityParameters, StarkDeFiLiquidityParameters, EkuboLiquidityParameters
+        CreatorCoin::LiquidityType, CreatorCoin::LiquidityParameters, EkuboLiquidityParameters
     };
     use creator_coin::utils::math::PercentageMath;
-    use creator_coin::utils::unique_count;
 
     /// The maximum percentage of the total supply that can be allocated to the team.
     /// This is to prevent the team from having too much control over the supply.
@@ -74,20 +71,15 @@ mod Factory {
         creator_coin_class_hash: ClassHash,
         exchange_configs: LegacyMap<SupportedExchanges, ContractAddress>,
         deployed_creator_coins: LegacyMap<ContractAddress, bool>,
-        lock_manager_address: ContractAddress,
-        migrated_lock_managers: LegacyMap<ContractAddress, ContractAddress>,
     }
 
     #[constructor]
     fn constructor(
         ref self: ContractState,
         creator_coin_class_hash: ClassHash,
-        lock_manager_address: ContractAddress,
         mut exchanges: Span<(SupportedExchanges, ContractAddress)>,
-        mut migrated_tokens: Span<(ContractAddress, ContractAddress)>,
     ) {
         self.creator_coin_class_hash.write(creator_coin_class_hash);
-        self.lock_manager_address.write(lock_manager_address);
 
         // Add Exchanges configurations
         loop {
@@ -98,23 +90,14 @@ mod Factory {
                 Option::None => { break; }
             }
         };
-
-        // Migrate old tokens, mark them as deployed
-        loop {
-            match migrated_tokens.pop_front() {
-                Option::Some((
-                    address, lock_manager
-                )) => {
-                    self.deployed_creator_coins.write(*address, true);
-                    self.migrated_lock_managers.write(*address, *lock_manager);
-                },
-                Option::None => { break; }
-            }
-        };
     }
 
     #[abi(embed_v0)]
     impl FactoryImpl of IFactory<ContractState> {
+        fn version(self: @ContractState) -> ByteArray {
+            "0.2.0"
+        }
+
         fn create_creator_coin(
             ref self: ContractState,
             owner: ContractAddress,
@@ -139,71 +122,12 @@ mod Factory {
             creator_coin_address
         }
 
-        fn launch_on_jediswap(
-            ref self: ContractState,
-            launch_parameters: LaunchParameters,
-            quote_amount: u256,
-            unlock_time: u64,
-        ) -> ContractAddress {
-            let (team_allocation, pre_holders) = check_common_launch_parameters(
-                @self, launch_parameters
-            );
-            let router_address = self.exchange_address(SupportedExchanges::Jediswap);
-            assert(router_address.is_non_zero(), errors::EXCHANGE_ADDRESS_ZERO);
-
-            let LaunchParameters{creator_coin_address,
-            transfer_restriction_delay,
-            max_percentage_buy_launch,
-            quote_address,
-            initial_holders,
-            initial_holders_amounts } =
-                launch_parameters;
-
-            let creator_coin = ICreatorCoinDispatcher { contract_address: creator_coin_address };
-            let (pair_address, lock_position) =
-                jediswap_adapter::JediswapAdapterImpl::create_and_add_liquidity(
-                exchange_address: router_address,
-                token_address: creator_coin_address,
-                quote_address: quote_address,
-                lp_supply: creator_coin.total_supply() - team_allocation,
-                additional_parameters: JediswapAdditionalParameters {
-                    lock_manager_address: self.lock_manager_address.read(),
-                    unlock_time,
-                    quote_amount
-                }
-            );
-
-            // Transfer the team's alloc
-            distribute_team_alloc(creator_coin, initial_holders, initial_holders_amounts);
-
-            creator_coin
-                .set_launched(
-                    LiquidityType::JediERC20(pair_address),
-                    LiquidityParameters::Jediswap(
-                        (JediswapLiquidityParameters { quote_address, quote_amount }, lock_position)
-                    ),
-                    :transfer_restriction_delay,
-                    :max_percentage_buy_launch,
-                    :team_allocation,
-                );
-
-            self
-                .emit(
-                    CreatorCoinLaunched {
-                        creator_coin_address, quote_token: quote_address, exchange_name: 'Jediswap'
-                    }
-                );
-            pair_address
-        }
-
         fn launch_on_ekubo(
             ref self: ContractState,
             launch_parameters: LaunchParameters,
             ekubo_parameters: EkuboPoolParameters,
         ) -> (u64, EkuboLP) {
-            let (team_allocation, pre_holders) = check_common_launch_parameters(
-                @self, launch_parameters
-            );
+            let team_allocation = check_common_launch_parameters(@self, launch_parameters);
 
             assert(ekubo_parameters.fee <= 0x51eb851eb851ec00000000000000000, errors::FEE_TOO_HIGH);
             assert(ekubo_parameters.tick_spacing >= 5982, errors::TICK_SPACING_TOO_LOW);
@@ -253,65 +177,6 @@ mod Factory {
             (id, position)
         }
 
-        fn launch_on_starkdefi(
-            ref self: ContractState,
-            launch_parameters: LaunchParameters,
-            quote_amount: u256,
-            unlock_time: u64,
-        ) -> ContractAddress {
-            let (team_allocation, pre_holders) = check_common_launch_parameters(
-                @self, launch_parameters
-            );
-            let router_address = self.exchange_address(SupportedExchanges::Starkdefi);
-            assert(router_address.is_non_zero(), errors::EXCHANGE_ADDRESS_ZERO);
-
-            let LaunchParameters{creator_coin_address,
-            transfer_restriction_delay,
-            max_percentage_buy_launch,
-            quote_address,
-            initial_holders,
-            initial_holders_amounts } =
-                launch_parameters;
-
-            let creator_coin = ICreatorCoinDispatcher { contract_address: creator_coin_address };
-            let (pair_address, lock_position) =
-                starkdefi_adapter::StarkDeFiAdapterImpl::create_and_add_liquidity(
-                exchange_address: router_address,
-                token_address: creator_coin_address,
-                quote_address: quote_address,
-                lp_supply: creator_coin.total_supply() - team_allocation,
-                additional_parameters: StarkDeFiAdditionalParameters {
-                    lock_manager_address: self.lock_manager_address.read(),
-                    unlock_time,
-                    quote_amount
-                }
-            );
-
-            // Transfer the team's alloc
-            distribute_team_alloc(creator_coin, initial_holders, initial_holders_amounts);
-
-            creator_coin
-                .set_launched(
-                    LiquidityType::StarkDeFiERC20(pair_address),
-                    LiquidityParameters::StarkDeFi(
-                        (
-                            StarkDeFiLiquidityParameters { quote_address, quote_amount },
-                            lock_position
-                        )
-                    ),
-                    :transfer_restriction_delay,
-                    :max_percentage_buy_launch,
-                    :team_allocation,
-                );
-            self
-                .emit(
-                    CreatorCoinLaunched {
-                        creator_coin_address, quote_token: quote_address, exchange_name: 'StarkDeFi'
-                    }
-                );
-            pair_address
-        }
-
         fn locked_liquidity(
             self: @ContractState, token: ContractAddress
         ) -> Option<(ContractAddress, LiquidityType)> {
@@ -321,23 +186,10 @@ mod Factory {
                 Option::None => { return Option::None; },
             };
 
-            let migrated_locker_address = self.migrated_lock_managers.read(token);
-            let locker_address = if (migrated_locker_address.is_non_zero()) {
-                migrated_locker_address
-            } else {
-                match liquidity_type {
-                    LiquidityType::JediERC20(pair_address) => {
-                        // ERC20 tokens are locked inside an ERC20Tokens-Locker
-                        self.lock_manager_address.read()
-                    },
-                    LiquidityType::StarkDeFiERC20(pair_address) => {
-                        // same as above
-                        self.lock_manager_address.read()
-                    },
-                    LiquidityType::EkuboNFT(id) => {
-                        // Ekubo NFTs are locked inside the EkuboLauncher contract
-                        self.exchange_address(SupportedExchanges::Ekubo)
-                    }
+            let locker_address = match liquidity_type {
+                LiquidityType::EkuboNFT(id) => {
+                    // Ekubo NFTs are locked inside the EkuboLauncher contract
+                    self.exchange_address(SupportedExchanges::Ekubo)
                 }
             };
 
@@ -346,10 +198,6 @@ mod Factory {
 
         fn exchange_address(self: @ContractState, exchange: SupportedExchanges) -> ContractAddress {
             self.exchange_configs.read(exchange)
-        }
-
-        fn lock_manager_address(self: @ContractState) -> ContractAddress {
-            self.lock_manager_address.read()
         }
 
         fn is_creator_coin(self: @ContractState, address: ContractAddress) -> bool {
@@ -375,7 +223,7 @@ mod Factory {
     /// It then calculates the maximum team allocation as a percentage of the total supply,
     /// and iteratively adds the amounts of the initial holders to the team allocation,
     /// ensuring that the total allocation does not exceed the maximum.
-    /// It finally returns the total team allocation and the count of unique initial holders.
+    /// It finally returns the total team allocation.
     ///
     /// # Arguments
     ///
@@ -384,7 +232,7 @@ mod Factory {
     ///
     /// # Returns
     ///
-    /// * `(u256, u8)` - The total amount of creator_coin allocated to the team and the count of unique initial holders.
+    /// * `u256` - The total amount of creator_coin allocated to the team.
     ///
     /// # Panics
     ///
@@ -398,7 +246,7 @@ mod Factory {
     ///
     fn check_common_launch_parameters(
         self: @ContractState, launch_parameters: LaunchParameters
-    ) -> (u256, u8) {
+    ) -> u256 {
         let LaunchParameters{creator_coin_address,
         transfer_restriction_delay,
         max_percentage_buy_launch,
@@ -435,7 +283,7 @@ mod Factory {
             i += 1;
         };
 
-        (team_allocation, unique_count(initial_holders).try_into().unwrap())
+        team_allocation
     }
 
     fn distribute_team_alloc(

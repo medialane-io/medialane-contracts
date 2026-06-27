@@ -1,7 +1,6 @@
 use array::ArrayTrait;
 use core::option::OptionTrait;
 use core::traits::TryInto;
-use debug::PrintTrait;
 use ekubo::components::clear::{IClearDispatcher, IClearDispatcherTrait};
 use ekubo::interfaces::erc20::{IERC20Dispatcher, IERC20DispatcherTrait};
 use ekubo::interfaces::router::{Depth, Delta, RouteNode, TokenAmount};

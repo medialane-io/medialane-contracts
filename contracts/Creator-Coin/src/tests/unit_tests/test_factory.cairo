@@ -164,7 +164,7 @@ fn test_migrate_creator_coin_from_old_factory() {
     Serde::serialize(@migrated_tokens, ref calldata);
     let new_factory = factory_hash
         .deploy_at(@calldata, 'new_factory'.try_into().unwrap())
-        .expect('UnrugFactory deployment failed');
+        .expect('Factory deployment failed');
     let new_factory_dispatcher = IFactoryDispatcher { contract_address: new_factory };
 
     let new_locker_manager = new_factory_dispatcher.lock_manager_address();

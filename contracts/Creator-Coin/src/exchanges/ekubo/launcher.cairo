@@ -253,7 +253,7 @@ mod EkuboLauncher {
             // Register the token in Ekubo Registry
             let registry = self.registry.read();
             let base_token = IERC20Dispatcher { contract_address: params.token_address };
-            // All unrug tokens are ERC20 with 18 decimals, thus the amount is 1 token.
+            // All Creator Coin tokens are ERC20 with 18 decimals, thus the amount is 1 token.
             base_token.transfer(registry.contract_address, 1000000000000000000);
             registry.register_token(OZIERC20Dispatcher { contract_address: params.token_address });
 

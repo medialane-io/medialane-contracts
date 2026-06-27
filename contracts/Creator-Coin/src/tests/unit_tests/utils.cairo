@@ -182,7 +182,7 @@ fn deploy_creator_coin_factory(router_address: ContractAddress) -> ContractAddre
     Serde::serialize(@locker_address, ref calldata);
     Serde::serialize(@amms.into(), ref calldata);
     Serde::serialize(@migrated_tokens, ref calldata);
-    contract.deploy_at(@calldata, CREATOR_COIN_FACTORY_ADDRESS()).expect('UnrugFactory deployment failed')
+    contract.deploy_at(@calldata, CREATOR_COIN_FACTORY_ADDRESS()).expect('Factory deployment failed')
 }
 
 // Locker

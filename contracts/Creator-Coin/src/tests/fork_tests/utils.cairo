@@ -73,7 +73,7 @@ fn deploy_creator_coin_factory(exchanges: Span<(SupportedExchanges, ContractAddr
     Serde::serialize(@lock_manager_address, ref calldata);
     Serde::serialize(@exchanges.into(), ref calldata);
     Serde::serialize(@migrated_tokens, ref calldata);
-    contract.deploy_at(@calldata, CREATOR_COIN_FACTORY_ADDRESS()).expect('UnrugFactory deployment failed')
+    contract.deploy_at(@calldata, CREATOR_COIN_FACTORY_ADDRESS()).expect('Factory deployment failed')
 }
 
 /// Deploys the factory and the creator_coin.

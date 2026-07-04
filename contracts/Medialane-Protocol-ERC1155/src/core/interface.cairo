@@ -18,4 +18,6 @@ pub trait IMedialane1155<TState> {
     ) -> felt252;
     fn get_counter(self: @TState, offerer: ContractAddress) -> felt252;
     fn get_native_token_address(self: @TState) -> ContractAddress;
+    /// The on-chain release version of this immutable deployment.
+    fn contract_version(self: @TState) -> felt252;
 }

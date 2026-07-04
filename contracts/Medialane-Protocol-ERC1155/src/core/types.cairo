@@ -75,8 +75,17 @@ impl ConsiderationItemHashImpl of StructHash<ConsiderationItem> {
     }
 }
 
-/// The signed order. See the 721 venue for the rationale behind `marketplace`,
-/// `royalty_max_bps`, `counter`, and the removal of nonce/end_amount.
+/// The signed order.
+/// - `marketplace`: binds the order to one deployed contract. Asserted
+///   `== get_contract_address()` at registration, so a signature for one
+///   deployment cannot be replayed on another.
+/// - `royalty_max_bps`: seller-signed cap on the EIP-2981 royalty paid at fill.
+///   The economic split is committed at signing.
+/// - `counter`: the offerer's bulk-cancel epoch. An order is only valid while
+///   `counter == get_counter(offerer)`; incrementing it invalidates all the
+///   offerer's outstanding orders at once.
+/// - `salt`: per-order uniqueness so two economically-identical orders hash
+///   distinctly. Client must randomize it.
 #[derive(Debug, Drop, Clone, Copy, Serde, Hash)]
 pub struct OrderParameters {
     pub offerer: ContractAddress,

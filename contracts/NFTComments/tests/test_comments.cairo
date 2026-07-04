@@ -184,6 +184,12 @@ fn test_comment_count_starts_at_zero() {
 }
 
 #[test]
+fn test_contract_version() {
+    let c = deploy_comments();
+    assert!(c.contract_version() == '0.1.0', "version mismatch");
+}
+
+#[test]
 fn test_comment_count_increments_per_comment() {
     let c = deploy_comments();
 

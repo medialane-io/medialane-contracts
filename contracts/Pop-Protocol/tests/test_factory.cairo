@@ -170,3 +170,19 @@ fn test_provider_collections_isolated_between_providers() {
     let org_ids = factory.get_provider_collection_ids(ORGANIZER(), 0, 10);
     assert(*org_ids.at(0) == 2, 'Org collection ID wrong');
 }
+
+#[test]
+#[should_panic(expected: ('Invalid class hash',))]
+fn test_set_zero_class_hash_reverts() {
+    let factory = deploy_factory();
+    let zero: starknet::ClassHash = 0.try_into().unwrap();
+    start_cheat_caller_address(factory.contract_address, ADMIN());
+    factory.set_pop_collection_class_hash(zero);
+    stop_cheat_caller_address(factory.contract_address);
+}
+
+#[test]
+fn test_factory_contract_version() {
+    let factory = deploy_factory();
+    assert(factory.contract_version() == '0.1.0', 'version mismatch');
+}

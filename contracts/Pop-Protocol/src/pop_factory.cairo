@@ -28,6 +28,8 @@ pub mod POPFactory {
 
     /// Role for organisations authorised to create collections.
     pub const ORGANIZER_ROLE: felt252 = selector!("ORGANIZER_ROLE");
+    /// On-chain release version of this deployment.
+    pub const CONTRACT_VERSION: felt252 = '0.1.0';
 
     component!(path: AccessControlComponent, storage: accesscontrol, event: AccessControlEvent);
     component!(path: SRC5Component, storage: src5, event: SRC5Event);
@@ -85,6 +87,7 @@ pub mod POPFactory {
         admin: ContractAddress,
         pop_collection_class_hash: ClassHash,
     ) {
+        assert(!pop_collection_class_hash.is_zero(), 'Invalid class hash');
         self.accesscontrol.initializer();
         self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, admin);
         // Admin bootstraps their own collections too
@@ -267,7 +270,12 @@ pub mod POPFactory {
 
         fn set_pop_collection_class_hash(ref self: ContractState, new_class_hash: ClassHash) {
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
+            assert(!new_class_hash.is_zero(), 'Invalid class hash');
             self.pop_collection_class_hash.write(new_class_hash);
+        }
+
+        fn contract_version(self: @ContractState) -> felt252 {
+            CONTRACT_VERSION
         }
     }
 

@@ -3,6 +3,12 @@ pragma solidity 0.8.28;
 
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
+import {IERC1155} from "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC2981} from "@openzeppelin/contracts/interfaces/IERC2981.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// Medialane1155 — immutable ERC1155 marketplace venue for signed orders, with
 /// partial fills and per-unit pricing.
@@ -17,7 +23,9 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
 ///      overflow-checked.
 ///
 /// No owner, admin, upgrade, or pause.
-contract Medialane1155 is EIP712 {
+contract Medialane1155 is EIP712, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     enum ItemType {
         NATIVE,
         ERC20,
@@ -86,7 +94,30 @@ contract Medialane1155 is EIP712 {
     mapping(address offerer => uint256) private _cancelCounter;
 
     event OrderCreated(bytes32 indexed orderHash, address indexed offerer);
+    event OrderFulfilled(
+        bytes32 indexed orderHash,
+        address indexed offerer,
+        address indexed fulfiller,
+        uint256 quantity,
+        uint256 remainingAmount,
+        uint256 saleAmount,
+        address royaltyReceiver,
+        uint256 royaltyAmount
+    );
+    event OrderCancelled(bytes32 indexed orderHash, address indexed offerer);
+    event CounterIncremented(address indexed offerer, uint256 newCounter);
 
+    error OrderNotFound();
+    error OrderAlreadyFilled();
+    error OrderCancelledError();
+    error SelfFill();
+    error OrderNotYetValid();
+    error WrongNativeValue();
+    error RoyaltyExceedsSale();
+    error NativeTransferFailed();
+    error CallerNotOfferer();
+    error InvalidQuantity();
+    error InsufficientRemaining();
     error InvalidOfferer();
     error InvalidCounter();
     error RoyaltyBpsTooHigh();
@@ -187,6 +218,164 @@ contract Medialane1155 is EIP712 {
                 )
             )
         );
+    }
+
+    /// Fulfil `quantity` units of an open order. The caller IS the fulfiller —
+    /// no fulfiller signature is required. Partial fills allowed
+    /// (1 <= quantity <= remaining); the order stays open until fully consumed.
+    /// For NATIVE-priced listings the caller sends exactly
+    /// price-per-unit * quantity as msg.value; all other fills send no value.
+    function fulfillOrder(bytes32 orderHash, uint256 quantity) external payable nonReentrant {
+        OrderDetails memory details = _orders[orderHash];
+        if (details.status == OrderStatus.None) revert OrderNotFound();
+        if (details.status == OrderStatus.Filled) revert OrderAlreadyFilled();
+        if (details.status == OrderStatus.Cancelled) revert OrderCancelledError();
+
+        address fulfiller = msg.sender;
+        if (fulfiller == details.offerer) revert SelfFill();
+        // Only fulfillable under the offerer's current bulk-cancel epoch,
+        // including any unfilled remainder of a partially-filled order.
+        if (details.counter != _cancelCounter[details.offerer]) revert InvalidCounter();
+        if (quantity == 0) revert InvalidQuantity();
+        if (quantity > details.remainingAmount) revert InsufficientRemaining();
+        if (block.timestamp < details.startTime) revert OrderNotYetValid();
+        if (details.endTime != 0 && block.timestamp >= details.endTime) revert OrderExpired();
+
+        // New remaining/status persists before any external call.
+        uint256 newRemaining = details.remainingAmount - quantity;
+        _orders[orderHash].remainingAmount = newRemaining;
+        if (newRemaining == 0) {
+            _orders[orderHash].status = OrderStatus.Filled;
+        }
+
+        (uint256 saleAmount, address royaltyReceiver, uint256 royaltyAmount) =
+            _executeTransfers(details, fulfiller, quantity);
+
+        emit OrderFulfilled(
+            orderHash, details.offerer, fulfiller, quantity, newRemaining, saleAmount, royaltyReceiver, royaltyAmount
+        );
+    }
+
+    /// Cancel a single open order (any unfilled remainder dies with it). Only
+    /// the order's offerer may cancel; the sender IS the authorization.
+    function cancelOrder(bytes32 orderHash) external {
+        OrderDetails memory details = _orders[orderHash];
+        if (details.status == OrderStatus.None) revert OrderNotFound();
+        if (details.status == OrderStatus.Filled) revert OrderAlreadyFilled();
+        if (details.status == OrderStatus.Cancelled) revert OrderCancelledError();
+        if (msg.sender != details.offerer) revert CallerNotOfferer();
+
+        _orders[orderHash].status = OrderStatus.Cancelled;
+        emit OrderCancelled(orderHash, details.offerer);
+    }
+
+    /// Bulk-cancel: bump the caller's counter, invalidating all of their
+    /// outstanding orders signed under the previous counter.
+    function incrementCounter() external {
+        uint256 newCounter = ++_cancelCounter[msg.sender];
+        emit CounterIncremented(msg.sender, newCounter);
+    }
+
+    /// Settles `quantity` units. Pulls payment from the payer (royalty first,
+    /// then the seller's remainder) and only THEN delivers the units.
+    /// Per-unit pricing: sale = price-per-unit * quantity.
+    function _executeTransfers(OrderDetails memory details, address fulfiller, uint256 quantity)
+        private
+        returns (uint256 saleAmount, address royaltyReceiver, uint256 royaltyAmount)
+    {
+        if (details.offer.itemType == ItemType.ERC1155) {
+            // Listing: buyer (fulfiller) pays; units go offerer -> fulfiller.
+            saleAmount = details.consideration.amount * quantity;
+            (royaltyReceiver, royaltyAmount) = _pay(
+                details.consideration.itemType,
+                details.consideration.token,
+                fulfiller,
+                details.consideration.recipient,
+                details.offer.token,
+                details.offer.identifier,
+                saleAmount,
+                details.royaltyMaxBps
+            );
+            IERC1155(details.offer.token).safeTransferFrom(
+                details.offerer, fulfiller, details.offer.identifier, quantity, ""
+            );
+        } else {
+            // Bid: bidder (offerer) pays; units go fulfiller -> recipient.
+            saleAmount = details.offer.amount * quantity;
+            (royaltyReceiver, royaltyAmount) = _pay(
+                details.offer.itemType,
+                details.offer.token,
+                details.offerer,
+                fulfiller,
+                details.consideration.token,
+                details.consideration.identifier,
+                saleAmount,
+                details.royaltyMaxBps
+            );
+            IERC1155(details.consideration.token).safeTransferFrom(
+                fulfiller, details.consideration.recipient, details.consideration.identifier, quantity, ""
+            );
+        }
+    }
+
+    /// Pays `saleAmount`: the (capped) ERC-2981 royalty to the creator, the
+    /// remainder to `sellerRecipient`. NATIVE settles from msg.value (exact);
+    /// ERC20 pulls from the payer.
+    function _pay(
+        ItemType paymentType,
+        address paymentToken,
+        address payer,
+        address sellerRecipient,
+        address nft,
+        uint256 tokenId,
+        uint256 saleAmount,
+        uint256 royaltyMaxBps
+    ) private returns (address royaltyReceiver, uint256 royaltyAmount) {
+        (royaltyReceiver, royaltyAmount) = _getRoyalty(nft, tokenId, saleAmount, royaltyMaxBps);
+        if (royaltyAmount > saleAmount) revert RoyaltyExceedsSale();
+        uint256 sellerAmount = saleAmount - royaltyAmount;
+
+        if (paymentType == ItemType.NATIVE) {
+            if (msg.value != saleAmount) revert WrongNativeValue();
+            if (royaltyAmount > 0) _sendNative(royaltyReceiver, royaltyAmount);
+            if (sellerAmount > 0) _sendNative(sellerRecipient, sellerAmount);
+        } else {
+            if (msg.value != 0) revert WrongNativeValue();
+            if (royaltyAmount > 0) IERC20(paymentToken).safeTransferFrom(payer, royaltyReceiver, royaltyAmount);
+            if (sellerAmount > 0) IERC20(paymentToken).safeTransferFrom(payer, sellerRecipient, sellerAmount);
+        }
+    }
+
+    function _sendNative(address to, uint256 amount) private {
+        (bool ok,) = to.call{value: amount}("");
+        if (!ok) revert NativeTransferFailed();
+    }
+
+    /// ERC-2981 royalty for the token on `saleAmount`, capped at the
+    /// seller-signed `royaltyMaxBps`. A non-2981 token, a failing call, a zero
+    /// receiver, or a zero amount yields no royalty.
+    function _getRoyalty(address nft, uint256 tokenId, uint256 saleAmount, uint256 royaltyMaxBps)
+        private
+        view
+        returns (address, uint256)
+    {
+        if (saleAmount == 0) return (address(0), 0);
+
+        try IERC165(nft).supportsInterface(type(IERC2981).interfaceId) returns (bool supported) {
+            if (!supported) return (address(0), 0);
+        } catch {
+            return (address(0), 0);
+        }
+
+        try IERC2981(nft).royaltyInfo(tokenId, saleAmount) returns (address receiver, uint256 rawAmount) {
+            if (receiver == address(0) || rawAmount == 0) return (address(0), 0);
+            uint256 maxAmount = saleAmount * royaltyMaxBps / BPS_DENOMINATOR;
+            uint256 capped = rawAmount > maxAmount ? maxAmount : rawAmount;
+            if (capped == 0) return (address(0), 0);
+            return (receiver, capped);
+        } catch {
+            return (address(0), 0);
+        }
     }
 
     function getOrderDetails(bytes32 orderHash) external view returns (OrderDetails memory) {

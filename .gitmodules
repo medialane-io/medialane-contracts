@@ -4,3 +4,9 @@
 [submodule "contracts/EVM-Marketplace-ERC721/lib/openzeppelin-contracts"]
 	path = contracts/EVM-Marketplace-ERC721/lib/openzeppelin-contracts
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+[submodule "contracts/EVM-Marketplace-ERC1155/lib/forge-std"]
+	path = contracts/EVM-Marketplace-ERC1155/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+[submodule "contracts/EVM-Marketplace-ERC1155/lib/openzeppelin-contracts"]
+	path = contracts/EVM-Marketplace-ERC1155/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts

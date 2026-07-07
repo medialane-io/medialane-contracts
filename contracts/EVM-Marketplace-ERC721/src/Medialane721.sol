@@ -3,6 +3,12 @@ pragma solidity 0.8.28;
 
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC2981} from "@openzeppelin/contracts/interfaces/IERC2981.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// Medialane721 — immutable ERC721 marketplace venue for signed orders.
 ///
@@ -14,7 +20,9 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
 ///      pulls payment before delivering the NFT, under a reentrancy guard.
 ///
 /// No owner, admin, upgrade, or pause.
-contract Medialane721 is EIP712 {
+contract Medialane721 is EIP712, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     enum ItemType {
         NATIVE,
         ERC20,
@@ -79,7 +87,24 @@ contract Medialane721 is EIP712 {
     mapping(address offerer => uint256) private _cancelCounter;
 
     event OrderCreated(bytes32 indexed orderHash, address indexed offerer);
+    event OrderFulfilled(
+        bytes32 indexed orderHash,
+        address indexed offerer,
+        address indexed fulfiller,
+        uint256 saleAmount,
+        address royaltyReceiver,
+        uint256 royaltyAmount
+    );
+    event CounterIncremented(address indexed offerer, uint256 newCounter);
 
+    error OrderNotFound();
+    error OrderAlreadyFilled();
+    error OrderCancelledError();
+    error SelfFill();
+    error OrderNotYetValid();
+    error WrongNativeValue();
+    error RoyaltyExceedsSale();
+    error NativeTransferFailed();
     error InvalidOfferer();
     error InvalidCounter();
     error RoyaltyBpsTooHigh();
@@ -142,6 +167,136 @@ contract Medialane721 is EIP712 {
             counter: parameters.counter
         });
         emit OrderCreated(orderHash, offerer);
+    }
+
+    /// Fulfil an open order. The caller IS the fulfiller — no fulfiller
+    /// signature is required. For NATIVE-priced listings the caller sends the
+    /// exact sale amount as msg.value; all other fills send no value.
+    function fulfillOrder(bytes32 orderHash) external payable nonReentrant {
+        OrderDetails memory details = _orders[orderHash];
+        if (details.status == OrderStatus.None) revert OrderNotFound();
+        if (details.status == OrderStatus.Filled) revert OrderAlreadyFilled();
+        if (details.status == OrderStatus.Cancelled) revert OrderCancelledError();
+
+        address fulfiller = msg.sender;
+        if (fulfiller == details.offerer) revert SelfFill();
+        if (details.counter != _cancelCounter[details.offerer]) revert InvalidCounter();
+        if (block.timestamp < details.startTime) revert OrderNotYetValid();
+        if (details.endTime != 0 && block.timestamp >= details.endTime) revert OrderExpired();
+
+        // Terminal state persists before any external call.
+        _orders[orderHash].status = OrderStatus.Filled;
+
+        (uint256 saleAmount, address royaltyReceiver, uint256 royaltyAmount) =
+            _executeTransfers(details, fulfiller);
+
+        emit OrderFulfilled(orderHash, details.offerer, fulfiller, saleAmount, royaltyReceiver, royaltyAmount);
+    }
+
+    /// Bulk-cancel: bump the caller's counter, invalidating all of their
+    /// outstanding orders signed under the previous counter.
+    function incrementCounter() external {
+        uint256 newCounter = ++_cancelCounter[msg.sender];
+        emit CounterIncremented(msg.sender, newCounter);
+    }
+
+    /// Settles an order: pulls payment from the payer (royalty first, then the
+    /// seller's remainder) and only THEN delivers the NFT.
+    function _executeTransfers(OrderDetails memory details, address fulfiller)
+        private
+        returns (uint256 saleAmount, address royaltyReceiver, uint256 royaltyAmount)
+    {
+        if (details.offer.itemType == ItemType.ERC721) {
+            // Listing: buyer (fulfiller) pays; NFT goes offerer -> fulfiller.
+            saleAmount = details.consideration.amount;
+            (royaltyReceiver, royaltyAmount) = _pay(
+                details.consideration.itemType,
+                details.consideration.token,
+                fulfiller,
+                details.consideration.recipient,
+                details.offer.token,
+                details.offer.identifier,
+                saleAmount,
+                details.royaltyMaxBps
+            );
+            IERC721(details.offer.token).transferFrom(details.offerer, fulfiller, details.offer.identifier);
+        } else {
+            // Bid: bidder (offerer) pays; NFT goes fulfiller -> recipient.
+            saleAmount = details.offer.amount;
+            (royaltyReceiver, royaltyAmount) = _pay(
+                details.offer.itemType,
+                details.offer.token,
+                details.offerer,
+                fulfiller,
+                details.consideration.token,
+                details.consideration.identifier,
+                saleAmount,
+                details.royaltyMaxBps
+            );
+            IERC721(details.consideration.token).transferFrom(
+                fulfiller, details.consideration.recipient, details.consideration.identifier
+            );
+        }
+    }
+
+    /// Pays `saleAmount`: the (capped) ERC-2981 royalty to the creator, the
+    /// remainder to `sellerRecipient`. NATIVE settles from msg.value (exact);
+    /// ERC20 pulls from the payer.
+    function _pay(
+        ItemType paymentType,
+        address paymentToken,
+        address payer,
+        address sellerRecipient,
+        address nft,
+        uint256 tokenId,
+        uint256 saleAmount,
+        uint256 royaltyMaxBps
+    ) private returns (address royaltyReceiver, uint256 royaltyAmount) {
+        (royaltyReceiver, royaltyAmount) = _getRoyalty(nft, tokenId, saleAmount, royaltyMaxBps);
+        if (royaltyAmount > saleAmount) revert RoyaltyExceedsSale();
+        uint256 sellerAmount = saleAmount - royaltyAmount;
+
+        if (paymentType == ItemType.NATIVE) {
+            if (msg.value != saleAmount) revert WrongNativeValue();
+            if (royaltyAmount > 0) _sendNative(royaltyReceiver, royaltyAmount);
+            if (sellerAmount > 0) _sendNative(sellerRecipient, sellerAmount);
+        } else {
+            if (msg.value != 0) revert WrongNativeValue();
+            if (royaltyAmount > 0) IERC20(paymentToken).safeTransferFrom(payer, royaltyReceiver, royaltyAmount);
+            if (sellerAmount > 0) IERC20(paymentToken).safeTransferFrom(payer, sellerRecipient, sellerAmount);
+        }
+    }
+
+    function _sendNative(address to, uint256 amount) private {
+        (bool ok,) = to.call{value: amount}("");
+        if (!ok) revert NativeTransferFailed();
+    }
+
+    /// ERC-2981 royalty for the NFT on `saleAmount`, capped at the
+    /// seller-signed `royaltyMaxBps`. A non-2981 NFT, a failing call, a zero
+    /// receiver, or a zero amount yields no royalty.
+    function _getRoyalty(address nft, uint256 tokenId, uint256 saleAmount, uint256 royaltyMaxBps)
+        private
+        view
+        returns (address, uint256)
+    {
+        if (saleAmount == 0) return (address(0), 0);
+
+        try IERC165(nft).supportsInterface(type(IERC2981).interfaceId) returns (bool supported) {
+            if (!supported) return (address(0), 0);
+        } catch {
+            return (address(0), 0);
+        }
+
+        try IERC2981(nft).royaltyInfo(tokenId, saleAmount) returns (address receiver, uint256 rawAmount) {
+            if (receiver == address(0) || rawAmount == 0) return (address(0), 0);
+            uint256 maxAmount = saleAmount * royaltyMaxBps / BPS_DENOMINATOR;
+            uint256 capped = rawAmount > maxAmount ? maxAmount : rawAmount;
+            if (capped == 0) return (address(0), 0);
+            return (receiver, capped);
+        } catch {
+            return (address(0), 0);
+        }
     }
 
     function getOrderDetails(bytes32 orderHash) external view returns (OrderDetails memory) {

@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token::TokenAccount;
 
 declare_id!("GBpbZYXuyC1EquzCUag5FrsryeenLHrnFea8LUGb1bRd");
 
@@ -176,6 +177,140 @@ pub mod medialane_marketplace {
         Ok(())
     }
 
+    /// Fulfil an open SPL-priced order. Listings: the fulfiller pays from
+    /// their token account. Bids: payment is pulled from the bidder's token
+    /// account through the SPL delegation to the settlement PDA, approved by
+    /// the bidder before fill — a missing or spent allowance fails the fill
+    /// atomically. Royalties as in `fulfill_order`, paid to the creators'
+    /// token accounts (remaining accounts, plugin order). Payment settles
+    /// before the asset moves.
+    pub fn fulfill_order_spl<'info>(
+        ctx: Context<'info, FulfillOrderSpl<'info>>,
+    ) -> Result<()> {
+        let order = &ctx.accounts.order;
+        require!(
+            order.payment_mint == Some(ctx.accounts.payment_mint.key()),
+            VenueError::WrongPaymentMint
+        );
+
+        check_fillable(
+            order,
+            ctx.accounts.fulfiller.key(),
+            ctx.accounts.cancel_counter.count,
+        )?;
+
+        ctx.accounts.order.status = OrderStatus::Filled;
+
+        let side = ctx.accounts.order.side;
+        let sale_amount = ctx.accounts.order.amount;
+        let asset_info = ctx.accounts.asset.to_account_info();
+        let collection_info = ctx.accounts.core_collection.to_account_info();
+        let (royalty_receiver, royalty_amount, shares) = royalty_shares(
+            &asset_info,
+            &collection_info,
+            sale_amount,
+            ctx.accounts.order.royalty_max_bps,
+        )?;
+
+        // Validate the creator token accounts against the plugin's creators.
+        require!(
+            ctx.remaining_accounts.len() == shares.len(),
+            VenueError::CreatorAccountMismatch
+        );
+        let mint_key = ctx.accounts.payment_mint.key();
+        for (i, (creator, _)) in shares.iter().enumerate() {
+            let info = &ctx.remaining_accounts[i];
+            let token_account = TokenAccount::try_deserialize(&mut &info.data.borrow()[..])?;
+            require!(
+                token_account.owner == *creator && token_account.mint == mint_key,
+                VenueError::CreatorAccountMismatch
+            );
+        }
+
+        // Payment first. Listings pull from the fulfiller (signer); bids pull
+        // from the bidder's account through the settlement PDA delegation.
+        let bump = ctx.bumps.settlement_authority;
+        let signer_seeds: &[&[&[u8]]] = &[&[b"authority", &[bump]]];
+        let (source, authority_is_delegate) = match side {
+            Side::Listing => (ctx.accounts.fulfiller_token.to_account_info(), false),
+            Side::Bid => (ctx.accounts.offerer_token.to_account_info(), true),
+        };
+        let payment_recipient = match side {
+            Side::Listing => ctx.accounts.offerer_token.to_account_info(),
+            Side::Bid => ctx.accounts.fulfiller_token.to_account_info(),
+        };
+
+        let pay = |to: AccountInfo<'info>, amount: u64| -> Result<()> {
+            if amount == 0 {
+                return Ok(());
+            }
+            let accounts = anchor_spl::token::Transfer {
+                from: source.clone(),
+                to,
+                authority: if authority_is_delegate {
+                    ctx.accounts.settlement_authority.to_account_info()
+                } else {
+                    ctx.accounts.fulfiller.to_account_info()
+                },
+            };
+            let cpi = if authority_is_delegate {
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.key(),
+                    accounts,
+                    signer_seeds,
+                )
+            } else {
+                CpiContext::new(ctx.accounts.token_program.key(), accounts)
+            };
+            anchor_spl::token::transfer(cpi, amount)
+        };
+
+        for (i, (_, share)) in shares.iter().enumerate() {
+            pay(ctx.remaining_accounts[i].clone(), *share)?;
+        }
+        let seller_amount = sale_amount
+            .checked_sub(royalty_amount)
+            .ok_or(VenueError::RoyaltyExceedsSale)?;
+        pay(payment_recipient, seller_amount)?;
+
+        // Delivery. Listings move via the settlement delegate; bids are
+        // fulfiller-signed (the fulfiller owns the asset).
+        let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
+        let settlement = ctx.accounts.settlement_authority.to_account_info();
+        let fulfiller_info = ctx.accounts.fulfiller.to_account_info();
+        let offerer_info = ctx.accounts.offerer.to_account_info();
+        match side {
+            Side::Listing => {
+                mpl_core::instructions::TransferV1CpiBuilder::new(&mpl_core_program)
+                    .asset(&asset_info)
+                    .collection(Some(&collection_info))
+                    .authority(Some(&settlement))
+                    .payer(&fulfiller_info)
+                    .new_owner(&fulfiller_info)
+                    .invoke_signed(signer_seeds)?;
+            }
+            Side::Bid => {
+                mpl_core::instructions::TransferV1CpiBuilder::new(&mpl_core_program)
+                    .asset(&asset_info)
+                    .collection(Some(&collection_info))
+                    .authority(Some(&fulfiller_info))
+                    .payer(&fulfiller_info)
+                    .new_owner(&offerer_info)
+                    .invoke()?;
+            }
+        }
+
+        emit!(OrderFulfilled {
+            order: ctx.accounts.order.key(),
+            offerer: ctx.accounts.order.offerer,
+            fulfiller: ctx.accounts.fulfiller.key(),
+            sale_amount,
+            royalty_receiver,
+            royalty_amount,
+        });
+        Ok(())
+    }
+
     /// Bulk-cancel: bump the caller's counter, invalidating all of their
     /// outstanding orders registered under the previous counter.
     pub fn increment_counter(ctx: Context<IncrementCounter>) -> Result<()> {
@@ -207,16 +342,14 @@ fn check_fillable(order: &Order, fulfiller: Pubkey, current_counter: u64) -> Res
 }
 
 /// Reads the Royalties plugin (asset first, then collection), caps the total
-/// at the signed maximum, validates the passed creator accounts against the
-/// plugin's creator list, and returns (first_creator, total, per-account
-/// payouts). No plugin, a zero total, or a zero sale ⇒ no royalty.
-fn royalty_payouts<'info>(
-    asset: &AccountInfo<'info>,
-    collection: &AccountInfo<'info>,
+/// at the signed maximum, and returns (first_creator, total, per-creator
+/// shares). No plugin, a zero total, or a zero sale ⇒ no royalty.
+fn royalty_shares(
+    asset: &AccountInfo,
+    collection: &AccountInfo,
     sale_amount: u64,
     royalty_max_bps: u16,
-    creator_accounts: &'info [AccountInfo<'info>],
-) -> Result<(Pubkey, u64, Vec<(AccountInfo<'info>, u64)>)> {
+) -> Result<(Pubkey, u64, Vec<(Pubkey, u64)>)> {
     let royalties = mpl_core::fetch_asset_plugin::<mpl_core::types::Royalties>(
         asset,
         mpl_core::types::PluginType::Royalties,
@@ -245,27 +378,45 @@ fn royalty_payouts<'info>(
         return Ok((Pubkey::default(), 0, vec![]));
     }
 
-    require!(
-        creator_accounts.len() == royalties.creators.len(),
-        VenueError::CreatorAccountMismatch
-    );
-    let mut payouts = Vec::with_capacity(royalties.creators.len());
+    let mut shares = Vec::with_capacity(royalties.creators.len());
     let mut paid: u64 = 0;
     for (i, creator) in royalties.creators.iter().enumerate() {
-        let account = &creator_accounts[i];
-        require!(
-            account.key() == creator.address,
-            VenueError::CreatorAccountMismatch
-        );
         let share = if i == royalties.creators.len() - 1 {
             total - paid
         } else {
             ((total as u128) * (creator.percentage as u128) / 100) as u64
         };
         paid += share;
-        payouts.push((account.clone(), share));
+        shares.push((creator.address, share));
     }
-    Ok((royalties.creators[0].address, total, payouts))
+    Ok((royalties.creators[0].address, total, shares))
+}
+
+/// SOL variant: validates the passed creator system accounts against the
+/// plugin's creator list and pairs each with its share.
+fn royalty_payouts<'info>(
+    asset: &AccountInfo<'info>,
+    collection: &AccountInfo<'info>,
+    sale_amount: u64,
+    royalty_max_bps: u16,
+    creator_accounts: &'info [AccountInfo<'info>],
+) -> Result<(Pubkey, u64, Vec<(AccountInfo<'info>, u64)>)> {
+    let (receiver, total, shares) =
+        royalty_shares(asset, collection, sale_amount, royalty_max_bps)?;
+    if total == 0 {
+        return Ok((receiver, 0, vec![]));
+    }
+    require!(
+        creator_accounts.len() == shares.len(),
+        VenueError::CreatorAccountMismatch
+    );
+    let mut payouts = Vec::with_capacity(shares.len());
+    for (i, (creator, share)) in shares.iter().enumerate() {
+        let account = &creator_accounts[i];
+        require!(account.key() == *creator, VenueError::CreatorAccountMismatch);
+        payouts.push((account.clone(), *share));
+    }
+    Ok((receiver, total, payouts))
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -369,6 +520,46 @@ pub struct FulfillOrder<'info> {
     /// CHECK: bound to the order; validated by mpl-core at transfer.
     #[account(mut)]
     pub core_collection: UncheckedAccount<'info>,
+    /// CHECK: constrained to the Metaplex Core program id.
+    #[account(address = mpl_core::programs::MPL_CORE_ID)]
+    pub mpl_core_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct FulfillOrderSpl<'info> {
+    #[account(mut)]
+    pub fulfiller: Signer<'info>,
+    #[account(mut, has_one = offerer, has_one = asset, has_one = core_collection)]
+    pub order: Account<'info, Order>,
+    /// CHECK: bound to the order by the has_one constraint.
+    #[account(mut)]
+    pub offerer: UncheckedAccount<'info>,
+    #[account(seeds = [b"counter", order.offerer.as_ref()], bump)]
+    pub cancel_counter: Account<'info, CancelCounter>,
+    /// CHECK: the venue's settlement delegate; signs delegated transfers.
+    #[account(seeds = [b"authority"], bump)]
+    pub settlement_authority: UncheckedAccount<'info>,
+    /// CHECK: bound to the order; validated by mpl-core at transfer.
+    #[account(mut)]
+    pub asset: UncheckedAccount<'info>,
+    /// CHECK: bound to the order; validated by mpl-core at transfer.
+    #[account(mut)]
+    pub core_collection: UncheckedAccount<'info>,
+    pub payment_mint: Account<'info, anchor_spl::token::Mint>,
+    #[account(
+        mut,
+        constraint = fulfiller_token.mint == payment_mint.key() @ VenueError::WrongPaymentMint,
+        constraint = fulfiller_token.owner == fulfiller.key() @ VenueError::WrongPaymentMint,
+    )]
+    pub fulfiller_token: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = offerer_token.mint == payment_mint.key() @ VenueError::WrongPaymentMint,
+        constraint = offerer_token.owner == order.offerer @ VenueError::WrongPaymentMint,
+    )]
+    pub offerer_token: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, anchor_spl::token::Token>,
     /// CHECK: constrained to the Metaplex Core program id.
     #[account(address = mpl_core::programs::MPL_CORE_ID)]
     pub mpl_core_program: UncheckedAccount<'info>,

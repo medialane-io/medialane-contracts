@@ -155,3 +155,112 @@ pub fn send(
     );
     svm.send_transaction(tx).map(|_| ()).map_err(|e| format!("{:?}", e.err))
 }
+
+use spl_associated_token_account::get_associated_token_address;
+use solana_sdk::program_pack::Pack;
+
+/// Creates an SPL mint (decimals 6) and mints `amount` to `owner`'s ATA.
+pub fn create_mint_and_fund(
+    svm: &mut LiteSVM,
+    payer: &Keypair,
+    owner: &Pubkey,
+    amount: u64,
+) -> (Pubkey, Pubkey) {
+    let mint = Keypair::new();
+    let rent = svm.minimum_balance_for_rent_exemption(spl_token::state::Mint::LEN);
+    let create_mint = solana_system_interface::instruction::create_account(
+        &payer.pubkey(),
+        &mint.pubkey(),
+        rent,
+        spl_token::state::Mint::LEN as u64,
+        &spl_token::id(),
+    );
+    let init_mint = spl_token::instruction::initialize_mint2(
+        &spl_token::id(),
+        &mint.pubkey(),
+        &payer.pubkey(),
+        None,
+        6,
+    )
+    .unwrap();
+    let tx = Transaction::new_signed_with_payer(
+        &[create_mint, init_mint],
+        Some(&payer.pubkey()),
+        &[payer, &mint],
+        svm.latest_blockhash(),
+    );
+    svm.send_transaction(tx).unwrap();
+
+    let ata = ensure_ata(svm, payer, owner, &mint.pubkey());
+    if amount > 0 {
+        let mint_to = spl_token::instruction::mint_to(
+            &spl_token::id(),
+            &mint.pubkey(),
+            &ata,
+            &payer.pubkey(),
+            &[],
+            amount,
+        )
+        .unwrap();
+        let tx = Transaction::new_signed_with_payer(
+            &[mint_to],
+            Some(&payer.pubkey()),
+            &[payer],
+            svm.latest_blockhash(),
+        );
+        svm.send_transaction(tx).unwrap();
+    }
+    (mint.pubkey(), ata)
+}
+
+pub fn ensure_ata(svm: &mut LiteSVM, payer: &Keypair, owner: &Pubkey, mint: &Pubkey) -> Pubkey {
+    let ata = get_associated_token_address(owner, mint);
+    if svm.get_account(&ata).is_none() {
+        let ix = spl_associated_token_account::instruction::create_associated_token_account(
+            &payer.pubkey(),
+            owner,
+            mint,
+            &spl_token::id(),
+        );
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&payer.pubkey()),
+            &[payer],
+            svm.latest_blockhash(),
+        );
+        svm.send_transaction(tx).unwrap();
+    }
+    ata
+}
+
+pub fn token_balance(svm: &LiteSVM, token_account: &Pubkey) -> u64 {
+    use solana_sdk::program_pack::Pack;
+    svm.get_account(token_account)
+        .map(|a| spl_token::state::Account::unpack(&a.data).unwrap().amount)
+        .unwrap_or(0)
+}
+
+pub fn approve_delegate(
+    svm: &mut LiteSVM,
+    owner: &Keypair,
+    token_account: &Pubkey,
+    delegate: &Pubkey,
+    amount: u64,
+) {
+    let ix = spl_token::instruction::approve(
+        &spl_token::id(),
+        token_account,
+        delegate,
+        &owner.pubkey(),
+        &[],
+        amount,
+    )
+    .unwrap();
+    let tx = Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&owner.pubkey()),
+        &[owner],
+        svm.latest_blockhash(),
+    );
+    svm.send_transaction(tx).unwrap();
+}

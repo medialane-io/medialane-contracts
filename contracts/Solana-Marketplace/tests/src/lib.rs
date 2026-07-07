@@ -4,3 +4,5 @@ mod common;
 mod test_register;
 #[cfg(test)]
 mod test_fulfill_sol;
+#[cfg(test)]
+mod test_fulfill_spl;

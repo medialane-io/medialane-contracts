@@ -4633,6 +4633,7 @@ dependencies = [
  "medialane_marketplace",
  "mpl-core",
  "solana-sdk",
+ "solana-system-interface 3.1.0",
  "spl-associated-token-account",
  "spl-token",
 ]

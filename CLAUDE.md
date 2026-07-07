@@ -382,3 +382,22 @@ Build & test:
     cd contracts/EVM-Marketplace-ERC721
     forge build
     forge test
+
+### EVM-Marketplace-ERC1155 (`contracts/EVM-Marketplace-ERC1155/`) — Ethereum + Base (Solidity)
+
+Immutable ERC-1155 marketplace venue for EIP-712 signed orders — the EVM port of
+`Medialane-Protocol-ERC1155` (post-remediation protocol), with partial fills and
+per-unit pricing (sale = price-per-unit × quantity). fulfillOrder(hash, quantity);
+remainingAmount tracks unfilled units; status stays Created until zero; counter
+re-checked at every fill (incl. remainders); ERC-2981 capped per fill; native ETH
+listings via msg.value (bids ERC-20 only); zero fees; no owner/admin/upgrade/pause.
+
+- **Stack**: Solidity 0.8.28 + OpenZeppelin v5.4.0 + Foundry
+- **EIP-712 domain**: name "Medialane", version "1" (verifyingContract separates it from the 721 venue)
+- **Status**: built and tested; NOT deployed (deploys are Phase 4, separately authorized)
+
+Build & test:
+
+    cd contracts/EVM-Marketplace-ERC1155
+    forge build
+    forge test

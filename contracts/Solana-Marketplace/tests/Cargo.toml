@@ -1,0 +1,17 @@
+[package]
+name = "tests"
+version = "0.1.0"
+description = "LiteSVM integration tests"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anchor-lang = "1.1.2"
+anchor-spl = "1.1.2"
+medialane_marketplace = { path = "../programs/medialane-marketplace", features = ["no-entrypoint"] }
+mpl-core = "0.12.1"
+litesvm = "0.13.1"
+solana-sdk = "3"
+borsh = "1"
+spl-token = "9"
+spl-associated-token-account = "8"

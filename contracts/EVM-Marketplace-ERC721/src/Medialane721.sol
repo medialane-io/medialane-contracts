@@ -96,6 +96,7 @@ contract Medialane721 is EIP712, ReentrancyGuard {
         uint256 royaltyAmount
     );
     event CounterIncremented(address indexed offerer, uint256 newCounter);
+    event OrderCancelled(bytes32 indexed orderHash, address indexed offerer);
 
     error OrderNotFound();
     error OrderAlreadyFilled();
@@ -105,6 +106,7 @@ contract Medialane721 is EIP712, ReentrancyGuard {
     error WrongNativeValue();
     error RoyaltyExceedsSale();
     error NativeTransferFailed();
+    error CallerNotOfferer();
     error InvalidOfferer();
     error InvalidCounter();
     error RoyaltyBpsTooHigh();
@@ -191,6 +193,19 @@ contract Medialane721 is EIP712, ReentrancyGuard {
             _executeTransfers(details, fulfiller);
 
         emit OrderFulfilled(orderHash, details.offerer, fulfiller, saleAmount, royaltyReceiver, royaltyAmount);
+    }
+
+    /// Cancel a single open order. Only the order's offerer may cancel; the
+    /// sender IS the authorization (no signature round-trip).
+    function cancelOrder(bytes32 orderHash) external {
+        OrderDetails memory details = _orders[orderHash];
+        if (details.status == OrderStatus.None) revert OrderNotFound();
+        if (details.status == OrderStatus.Filled) revert OrderAlreadyFilled();
+        if (details.status == OrderStatus.Cancelled) revert OrderCancelledError();
+        if (msg.sender != details.offerer) revert CallerNotOfferer();
+
+        _orders[orderHash].status = OrderStatus.Cancelled;
+        emit OrderCancelled(orderHash, details.offerer);
     }
 
     /// Bulk-cancel: bump the caller's counter, invalidating all of their

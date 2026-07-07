@@ -186,15 +186,17 @@ DROP_START_BLOCK=8341335
 
 ### Medialane-Protocol-ERC721 (`contracts/Medialane-Protocol-ERC721/`)
 
-> **REDESIGN IN PROGRESS (2026-05-30, branch `feat/marketplace-721-redesign`, NOT yet audited/deployed).**
-> The contract is renamed **`Medialane721`** (SNIP-12 version **4**), package `0.4.0`, 30 snforge tests.
-> New signed order schema (`marketplace` binding, `royalty_max_bps`, `counter`; no `nonce`/`end_amount`),
-> EIP-2981 royalties, reentrancy guard + payment-before-delivery, self-fill guard, shape allow-list.
-> Declare with `--contract-name Medialane721`. Full record + deploy/migration plan:
-> `medialane-core/docs/audits/2026-05-30-marketplace-redesign-implementation.md`.
-> The addresses below are the **current live (pre-redesign)** deployment, to be superseded by a fresh class.
+> **REDESIGN DEPLOYED.** The redesign described below (branch `feat/marketplace-721-redesign`)
+> shipped as **`Medialane721`** on 2026-05-31, then was **redeployed again on 2026-06-26** as part
+> of a joint audit-remediation release (SNIP-12 version bumped **4→5**; H-1 bulk-cancel-at-fill
+> fix). **Current live address**: see `getCoordinates("STARKNET").marketplace721` in
+> `@medialane/sdk`'s `src/chains.ts` (`0x03eda9a2…` as of SDK 0.51.0) — **do not trust a hardcoded
+> address in this file**, addresses here are historical deploy records only. Full record:
+> `medialane-core/docs/audits/2026-05-30-marketplace-redesign-implementation.md`,
+> `medialane-core/docs/specs/2026-06-25-collections-marketplaces-remediation-design.md`.
+> The addresses below are the **pre-redesign (2026-04-05)** deployment — retired, do not use.
 
-Core marketplace contracts (order registration, fulfillment, cancellation). Audited and redeployed 2026-04-05.
+Core marketplace contracts (order registration, fulfillment, cancellation). Audited and redeployed 2026-04-05. **Retired** — superseded by the 2026-05-31 redesign, itself superseded by the 2026-06-26 redeploy above.
 
 - **Contract address**: `0x0234f4e8838801ebf01d7f4166d42aed9a55bc67c1301162decf9e2040e05f16`
 - **Class hash**: `0x06e45fbc001580e52948d528e236002cd35a226b557a81400e0fb77ddbaa7727`
@@ -229,15 +231,17 @@ PATH="..." sncast --profile medialane-mainnet deploy \
 
 ### Medialane-Protocol-ERC1155 (`contracts/Medialane-Protocol-ERC1155/`)
 
-> **REDESIGN IN PROGRESS (2026-05-30, branch `feat/marketplace-1155-redesign`, NOT yet audited/deployed).**
-> The contract is renamed **`Medialane1155`** (drop the `V2` suffix; SNIP-12 version **3**), package `0.4.0`, 33 snforge tests.
-> Same new order schema as the 721 venue (`marketplace` binding, `royalty_max_bps`, `counter`; no `nonce`/`end_amount`),
-> partial fills, **corrected EIP-2981 interface id** (the old hardcoded id never matched the OZ collection → royalties
-> were silently unpaid), reentrancy guard + payment-before-delivery. `fulfill_order(order_hash, quantity)`, no fulfiller sig.
-> Declare with `--contract-name Medialane1155`. Full record: `medialane-core/docs/audits/2026-05-30-marketplace-redesign-implementation.md`.
-> The addresses below are the **current live (pre-redesign)** deployment, to be superseded by a fresh class.
+> **REDESIGN DEPLOYED.** The redesign described below (branch `feat/marketplace-1155-redesign`)
+> shipped as **`Medialane1155`** (dropped the `V2` suffix) on 2026-05-31, then was **redeployed
+> again on 2026-06-26** as part of a joint audit-remediation release (SNIP-12 version bumped
+> **3→4**; H-1 bulk-cancel-at-fill fix). **Current live address**: see
+> `getCoordinates("STARKNET").marketplace1155` in `@medialane/sdk`'s `src/chains.ts`
+> (`0x07c4ce1c…` as of SDK 0.51.0) — **do not trust a hardcoded address in this file**.
+> Full record: `medialane-core/docs/audits/2026-05-30-marketplace-redesign-implementation.md`,
+> `medialane-core/docs/specs/2026-06-25-collections-marketplaces-remediation-design.md`.
+> The addresses below are the **pre-redesign (2026-04-20)** deployment — retired, do not use.
 
-ERC-1155 marketplace with partial fills. Redesigned and deployed 2026-04-20.
+ERC-1155 marketplace with partial fills. Redesigned and deployed 2026-04-20. **Retired** — superseded by the 2026-05-31 redesign, itself superseded by the 2026-06-26 redeploy above.
 
 - **Contract address**: `0x03aab04e806542cd88bfd0c5bb2a37334fd742d477a2e0f97af09aa4a36137ca`
 - **Class hash**: `0x6c7b47744ff1a99eacdfe0f097fdae9f5c45d0cf660ae5170b1e7d270c19313`
@@ -360,3 +364,21 @@ npx hardhat verify --network mainnet <vesting_address> "<token_address>" "0xA760
 3. Register MDLN on StarkGate for L2 bridging
 4. Create Snapshot space pointing at MDLN token address
 5. Seed Uniswap LP (after Starknet Foundation grant lands)
+
+### EVM-Marketplace-ERC721 (`contracts/EVM-Marketplace-ERC721/`) — Ethereum + Base (Solidity)
+
+Immutable ERC-721 marketplace venue for EIP-712 signed orders — the EVM port of
+`Medialane-Protocol-ERC721` (post-remediation protocol). Register (signed) →
+fulfill (unsigned, caller pays) → cancel/incrementCounter; four statuses;
+ERC-2981 royalties capped at the seller-signed max; ECDSA + ERC-1271; native ETH
+listings via msg.value (bids are ERC-20 only); zero fees; no owner/admin/upgrade/pause.
+
+- **Stack**: Solidity 0.8.28 + OpenZeppelin v5.4.0 + Foundry
+- **EIP-712 domain**: name "Medialane", version "1" (chainId + verifyingContract bind deployments)
+- **Status**: built and tested; NOT deployed (deploys are Phase 4, separately authorized)
+
+Build & test:
+
+    cd contracts/EVM-Marketplace-ERC721
+    forge build
+    forge test

@@ -204,3 +204,143 @@ fn register_rejects_negative_amount() {
     let s = setup(0);
     register_listing(&s, 1, -5, 0, 1_000_000, 0, 0);
 }
+
+// ---------- fulfillment ----------
+
+fn approve_nft_to_venue(s: &Setup) {
+    s.nft_client.approve_for_all(&s.seller, &s.venue.address, &10_000u32);
+}
+
+#[test]
+fn fulfill_listing_splits_payment_with_capped_royalty() {
+    let s = setup(2000); // 20% plugin royalty, capped by the signed 10%
+    register_listing(&s, 1, 100_000_000, 1000, 1_000_000, 0, 0);
+    approve_nft_to_venue(&s);
+    s.venue.fulfill_order(&s.buyer, &s.seller, &1u64);
+    assert_eq!(s.nft_client.owner_of(&7u32), s.buyer);
+    assert_eq!(s.pay_client.balance(&s.royalty_receiver), 10_000_000); // capped 10%
+    assert_eq!(s.pay_client.balance(&s.seller), 90_000_000);
+    assert_eq!(s.pay_client.balance(&s.buyer), 900_000_000);
+    let order = s.venue.get_order(&s.seller, &1u64);
+    assert_eq!(order.status, crate::OrderStatus::Filled);
+}
+
+#[test]
+fn fulfill_listing_royalty_under_cap() {
+    let s = setup(500); // 5% under the 10% cap
+    register_listing(&s, 1, 100_000_000, 1000, 1_000_000, 0, 0);
+    approve_nft_to_venue(&s);
+    s.venue.fulfill_order(&s.buyer, &s.seller, &1u64);
+    assert_eq!(s.pay_client.balance(&s.royalty_receiver), 5_000_000);
+    assert_eq!(s.pay_client.balance(&s.seller), 95_000_000);
+}
+
+#[test]
+fn fulfill_listing_absent_royalty_interface_seller_keeps_all() {
+    let s = setup(0);
+    let bare = s.env.register(BareNft, ());
+    let bare_client = BareNftClient::new(&s.env, &bare);
+    bare_client.mint(&s.seller, &7u32);
+    s.venue.register_order(
+        &s.seller, &2u64, &Side::Listing, &bare, &7u32, &s.pay, &100_000_000i128, &1000u32,
+        &1_000_000u64, &0u64, &0u64,
+    );
+    bare_client.approve_for_all(&s.seller, &s.venue.address, &10_000u32);
+    s.venue.fulfill_order(&s.buyer, &s.seller, &2u64);
+    assert_eq!(bare_client.owner_of(&7u32), s.buyer);
+    assert_eq!(s.pay_client.balance(&s.seller), 100_000_000);
+}
+
+#[test]
+fn fulfill_free_order() {
+    let s = setup(500);
+    register_listing(&s, 1, 0, 1000, 1_000_000, 0, 0);
+    approve_nft_to_venue(&s);
+    s.venue.fulfill_order(&s.buyer, &s.seller, &1u64);
+    assert_eq!(s.nft_client.owner_of(&7u32), s.buyer);
+    assert_eq!(s.pay_client.balance(&s.seller), 0);
+}
+
+#[test]
+fn fulfill_bid_with_token_allowance() {
+    let s = setup(500);
+    // buyer bids 100_000_000 for token 7; approves the venue on the payment token.
+    s.venue.register_order(
+        &s.buyer, &3u64, &Side::Bid, &s.nft, &7u32, &s.pay, &100_000_000i128, &1000u32,
+        &1_000_000u64, &0u64, &0u64,
+    );
+    s.pay_client.approve(&s.buyer, &s.venue.address, &100_000_000i128, &10_000u32);
+    // seller (owner) fulfills; NFT moves under the seller's own auth.
+    s.venue.fulfill_order(&s.seller, &s.buyer, &3u64);
+    assert_eq!(s.nft_client.owner_of(&7u32), s.buyer);
+    assert_eq!(s.pay_client.balance(&s.royalty_receiver), 5_000_000);
+    assert_eq!(s.pay_client.balance(&s.seller), 95_000_000);
+}
+
+#[test]
+#[should_panic]
+fn fulfill_bid_without_allowance_fails() {
+    let s = setup(0);
+    s.venue.register_order(
+        &s.buyer, &3u64, &Side::Bid, &s.nft, &7u32, &s.pay, &100_000_000i128, &0u32,
+        &1_000_000u64, &0u64, &0u64,
+    );
+    s.venue.fulfill_order(&s.seller, &s.buyer, &3u64);
+}
+
+#[test]
+#[should_panic]
+fn fulfill_listing_without_nft_approval_fails() {
+    let s = setup(0);
+    register_listing(&s, 1, 100_000_000, 0, 1_000_000, 0, 0);
+    // No approve_for_all.
+    s.venue.fulfill_order(&s.buyer, &s.seller, &1u64);
+}
+
+#[test]
+#[should_panic]
+fn fulfill_self_fill_rejected() {
+    let s = setup(0);
+    register_listing(&s, 1, 1, 0, 1_000_000, 0, 0);
+    approve_nft_to_venue(&s);
+    s.venue.fulfill_order(&s.seller, &s.seller, &1u64);
+}
+
+#[test]
+#[should_panic]
+fn fulfill_double_fill_rejected() {
+    let s = setup(0);
+    register_listing(&s, 1, 1_000_000, 0, 1_000_000, 0, 0);
+    approve_nft_to_venue(&s);
+    s.venue.fulfill_order(&s.buyer, &s.seller, &1u64);
+    s.venue.fulfill_order(&s.buyer, &s.seller, &1u64);
+}
+
+#[test]
+#[should_panic]
+fn fulfill_stale_counter_rejected() {
+    let s = setup(0);
+    register_listing(&s, 1, 1_000_000, 0, 1_000_000, 0, 0);
+    approve_nft_to_venue(&s);
+    s.venue.increment_counter(&s.seller);
+    s.venue.fulfill_order(&s.buyer, &s.seller, &1u64);
+}
+
+#[test]
+#[should_panic]
+fn fulfill_not_yet_valid_rejected() {
+    let s = setup(0);
+    register_listing(&s, 1, 1_000_000, 0, 2_000_000, 3_000_000, 0);
+    approve_nft_to_venue(&s);
+    s.venue.fulfill_order(&s.buyer, &s.seller, &1u64);
+}
+
+#[test]
+#[should_panic]
+fn fulfill_expired_rejected() {
+    let s = setup(0);
+    register_listing(&s, 1, 1_000_000, 0, 1_000_000, 1_500_000, 0);
+    approve_nft_to_venue(&s);
+    s.env.ledger().set_timestamp(2_000_000);
+    s.venue.fulfill_order(&s.buyer, &s.seller, &1u64);
+}

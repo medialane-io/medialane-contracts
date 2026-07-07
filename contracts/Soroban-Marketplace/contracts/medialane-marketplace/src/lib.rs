@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    Env, String, Symbol,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
+    vec, Address, Env, IntoVal, String, Symbol, Val,
 };
 
 /// Medialane marketplace — immutable venue for NFT collections on Stellar.
@@ -141,6 +141,93 @@ impl MedialaneMarketplace {
         e.events().publish((EVT_CREATED, offerer), salt);
     }
 
+    /// Fulfil an open order. The caller IS the fulfiller. Listings: the
+    /// fulfiller pays directly (their authorization covers the token
+    /// transfer) and the NFT moves under the venue's approval granted by the
+    /// offerer. Bids: payment is pulled through the offerer's token allowance
+    /// to the venue, and the fulfiller (the NFT owner) delivers under their
+    /// own authorization. Royalties are read via the collection's
+    /// royalty_info interface (absent or failing => none), capped at the
+    /// offerer-signed maximum. Payment settles before the NFT moves.
+    pub fn fulfill_order(e: Env, fulfiller: Address, offerer: Address, salt: u64) {
+        fulfiller.require_auth();
+        let key = DataKey::Order(offerer.clone(), salt);
+        let mut order: Order = e
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&e, VenueError::OrderNotFound));
+
+        match order.status {
+            OrderStatus::Created => {}
+            OrderStatus::Filled => panic_with_error!(&e, VenueError::OrderAlreadyFilled),
+            OrderStatus::Cancelled => panic_with_error!(&e, VenueError::OrderCancelled),
+        }
+        if fulfiller == order.offerer {
+            panic_with_error!(&e, VenueError::SelfFill);
+        }
+        if order.counter != Self::get_counter(e.clone(), order.offerer.clone()) {
+            panic_with_error!(&e, VenueError::InvalidCounter);
+        }
+        let now = e.ledger().timestamp();
+        if now < order.start_time {
+            panic_with_error!(&e, VenueError::OrderNotYetValid);
+        }
+        if order.end_time != 0 && now >= order.end_time {
+            panic_with_error!(&e, VenueError::OrderExpired);
+        }
+
+        order.status = OrderStatus::Filled;
+        e.storage().persistent().set(&key, &order);
+
+        let (royalty_receiver, royalty_amount) =
+            Self::capped_royalty(&e, &order.collection, order.token_id, order.amount, order.royalty_max_bps);
+        if royalty_amount > order.amount {
+            panic_with_error!(&e, VenueError::RoyaltyExceedsSale);
+        }
+        let seller_amount = order.amount - royalty_amount;
+
+        let pay = token::Client::new(&e, &order.payment_token);
+        let venue = e.current_contract_address();
+        match order.side {
+            Side::Listing => {
+                // Payment from the fulfiller, then the NFT via the venue's approval.
+                if royalty_amount > 0 {
+                    pay.transfer(&fulfiller, royalty_receiver.as_ref().unwrap(), &royalty_amount);
+                }
+                if seller_amount > 0 {
+                    pay.transfer(&fulfiller, &order.offerer, &seller_amount);
+                }
+                Self::nft_transfer_from(&e, &order.collection, &venue, &order.offerer, &fulfiller, order.token_id);
+            }
+            Side::Bid => {
+                // Payment through the bidder's allowance, then the NFT under
+                // the fulfiller's own authorization.
+                if royalty_amount > 0 {
+                    pay.transfer_from(&venue, &order.offerer, royalty_receiver.as_ref().unwrap(), &royalty_amount);
+                }
+                if seller_amount > 0 {
+                    pay.transfer_from(&venue, &order.offerer, &fulfiller, &seller_amount);
+                }
+                Self::nft_transfer_from(&e, &order.collection, &fulfiller, &fulfiller, &order.offerer, order.token_id);
+            }
+        }
+
+        e.events().publish(
+            (EVT_FILLED, order.offerer.clone(), fulfiller),
+            (salt, order.amount, royalty_receiver, royalty_amount),
+        );
+    }
+
+    /// Bulk-cancel: bump the caller's counter, invalidating all of their
+    /// outstanding orders registered under the previous counter.
+    pub fn increment_counter(e: Env, offerer: Address) {
+        offerer.require_auth();
+        let new_counter = Self::get_counter(e.clone(), offerer.clone()) + 1;
+        e.storage().persistent().set(&DataKey::Counter(offerer.clone()), &new_counter);
+        e.events().publish((EVT_COUNTER, offerer), new_counter);
+    }
+
     pub fn get_order(e: Env, offerer: Address, salt: u64) -> Order {
         e.storage()
             .persistent()
@@ -154,6 +241,61 @@ impl MedialaneMarketplace {
 
     pub fn version(e: Env) -> String {
         String::from_str(&e, "1.0.0")
+    }
+
+    /// Royalty via the collection's royalty_info interface, capped at the
+    /// signed maximum. Absent interface, failed call, or zero amounts yield
+    /// no royalty.
+    fn capped_royalty(
+        e: &Env,
+        collection: &Address,
+        token_id: u32,
+        sale_amount: i128,
+        royalty_max_bps: u32,
+    ) -> (Option<Address>, i128) {
+        if sale_amount == 0 {
+            return (None, 0);
+        }
+        let args = vec![e, token_id.into_val(e), sale_amount.into_val(e)];
+        let result: Result<(Address, i128), _> = e
+            .try_invoke_contract::<(Address, i128), soroban_sdk::Error>(
+                collection,
+                &Symbol::new(e, "royalty_info"),
+                args,
+            )
+            .map_err(|_| ())
+            .and_then(|inner| inner.map_err(|_| ()));
+        let Ok((receiver, raw_amount)) = result else {
+            return (None, 0);
+        };
+        if raw_amount <= 0 {
+            return (None, 0);
+        }
+        let max_amount = sale_amount * (royalty_max_bps as i128) / 10_000;
+        let capped = raw_amount.min(max_amount);
+        if capped <= 0 {
+            return (None, 0);
+        }
+        (Some(receiver), capped)
+    }
+
+    /// NFT delivery through the collection's transfer_from surface.
+    fn nft_transfer_from(
+        e: &Env,
+        collection: &Address,
+        spender: &Address,
+        from: &Address,
+        to: &Address,
+        token_id: u32,
+    ) {
+        let args = vec![
+            e,
+            spender.into_val(e),
+            from.into_val(e),
+            to.into_val(e),
+            token_id.into_val(e),
+        ];
+        let _: Val = e.invoke_contract(collection, &Symbol::new(e, "transfer_from"), args);
     }
 }
 

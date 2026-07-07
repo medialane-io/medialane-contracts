@@ -219,6 +219,26 @@ impl MedialaneMarketplace {
         );
     }
 
+    /// Cancel a single open order. Only the order's offerer may cancel; the
+    /// offerer's authorization IS the permission.
+    pub fn cancel_order(e: Env, offerer: Address, salt: u64) {
+        offerer.require_auth();
+        let key = DataKey::Order(offerer.clone(), salt);
+        let mut order: Order = e
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&e, VenueError::OrderNotFound));
+        match order.status {
+            OrderStatus::Created => {}
+            OrderStatus::Filled => panic_with_error!(&e, VenueError::OrderAlreadyFilled),
+            OrderStatus::Cancelled => panic_with_error!(&e, VenueError::OrderCancelled),
+        }
+        order.status = OrderStatus::Cancelled;
+        e.storage().persistent().set(&key, &order);
+        e.events().publish((EVT_CANCELLED, offerer), salt);
+    }
+
     /// Bulk-cancel: bump the caller's counter, invalidating all of their
     /// outstanding orders registered under the previous counter.
     pub fn increment_counter(e: Env, offerer: Address) {

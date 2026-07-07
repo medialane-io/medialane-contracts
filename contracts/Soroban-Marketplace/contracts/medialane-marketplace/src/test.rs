@@ -344,3 +344,50 @@ fn fulfill_expired_rejected() {
     s.env.ledger().set_timestamp(2_000_000);
     s.venue.fulfill_order(&s.buyer, &s.seller, &1u64);
 }
+
+// ---------- cancel + counter ----------
+
+#[test]
+fn cancel_blocks_fill() {
+    let s = setup(0);
+    register_listing(&s, 1, 1_000_000, 0, 1_000_000, 0, 0);
+    approve_nft_to_venue(&s);
+    s.venue.cancel_order(&s.seller, &1u64);
+    let order = s.venue.get_order(&s.seller, &1u64);
+    assert_eq!(order.status, crate::OrderStatus::Cancelled);
+    let result = s.venue.try_fulfill_order(&s.buyer, &s.seller, &1u64);
+    assert!(result.is_err());
+}
+
+#[test]
+#[should_panic]
+fn cancel_after_fill_rejected() {
+    let s = setup(0);
+    register_listing(&s, 1, 1_000_000, 0, 1_000_000, 0, 0);
+    approve_nft_to_venue(&s);
+    s.venue.fulfill_order(&s.buyer, &s.seller, &1u64);
+    s.venue.cancel_order(&s.seller, &1u64);
+}
+
+#[test]
+#[should_panic]
+fn cancel_unknown_rejected() {
+    let s = setup(0);
+    s.venue.cancel_order(&s.seller, &99u64);
+}
+
+#[test]
+fn counter_bump_blocks_stale_registration_and_allows_fresh() {
+    let s = setup(0);
+    s.venue.increment_counter(&s.seller);
+    assert_eq!(s.venue.get_counter(&s.seller), 1);
+    let stale = s.venue.try_register_order(
+        &s.seller, &2u64, &Side::Listing, &s.nft, &7u32, &s.pay, &1i128, &0u32,
+        &1_000_000u64, &0u64, &0u64,
+    );
+    assert!(stale.is_err());
+    s.venue.register_order(
+        &s.seller, &2u64, &Side::Listing, &s.nft, &7u32, &s.pay, &1i128, &0u32,
+        &1_000_000u64, &0u64, &1u64,
+    );
+}

@@ -1,8 +1,20 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
-    vec, Address, Env, IntoVal, String, Symbol, Val,
+    contract, contractclient, contracterror, contractimpl, contracttype, panic_with_error,
+    symbol_short, token, Address, Env, String, Symbol,
 };
+
+/// The collection interface this venue trades against — the open Medialane
+/// collection surface. `transfer_from` follows the OpenZeppelin Stellar
+/// non-fungible convention; `royalty_info` is the open royalty interface
+/// (receiver + amount for a sale price). Any collection implementing these is
+/// tradeable here; a collection without `royalty_info` simply yields no
+/// royalty.
+#[contractclient(name = "CollectionClient")]
+pub trait MedialaneCollection {
+    fn transfer_from(e: Env, spender: Address, from: Address, to: Address, token_id: u32);
+    fn royalty_info(e: Env, token_id: u32, sale_price: i128) -> (Address, i128);
+}
 
 /// Medialane marketplace — immutable venue for NFT collections on Stellar.
 ///
@@ -276,16 +288,9 @@ impl MedialaneMarketplace {
         if sale_amount == 0 {
             return (None, 0);
         }
-        let args = vec![e, token_id.into_val(e), sale_amount.into_val(e)];
-        let result: Result<(Address, i128), _> = e
-            .try_invoke_contract::<(Address, i128), soroban_sdk::Error>(
-                collection,
-                &Symbol::new(e, "royalty_info"),
-                args,
-            )
-            .map_err(|_| ())
-            .and_then(|inner| inner.map_err(|_| ()));
-        let Ok((receiver, raw_amount)) = result else {
+        let client = CollectionClient::new(e, collection);
+        let Ok(Ok((receiver, raw_amount))) = client.try_royalty_info(&token_id, &sale_amount)
+        else {
             return (None, 0);
         };
         if raw_amount <= 0 {
@@ -308,14 +313,7 @@ impl MedialaneMarketplace {
         to: &Address,
         token_id: u32,
     ) {
-        let args = vec![
-            e,
-            spender.into_val(e),
-            from.into_val(e),
-            to.into_val(e),
-            token_id.into_val(e),
-        ];
-        let _: Val = e.invoke_contract(collection, &Symbol::new(e, "transfer_from"), args);
+        CollectionClient::new(e, collection).transfer_from(spender, from, to, &token_id);
     }
 }
 

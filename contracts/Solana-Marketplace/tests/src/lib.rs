@@ -6,3 +6,5 @@ mod test_register;
 mod test_fulfill_sol;
 #[cfg(test)]
 mod test_fulfill_spl;
+#[cfg(test)]
+mod test_cancel;

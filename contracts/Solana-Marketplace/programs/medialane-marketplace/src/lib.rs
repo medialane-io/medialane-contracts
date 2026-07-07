@@ -55,19 +55,45 @@ pub mod medialane_marketplace {
             let core_collection = ctx.accounts.core_collection.to_account_info();
             let offerer = ctx.accounts.offerer.to_account_info();
             let system_program = ctx.accounts.system_program.to_account_info();
-            mpl_core::instructions::AddPluginV1CpiBuilder::new(&mpl_core_program)
-                .asset(&asset)
-                .collection(Some(&core_collection))
-                .authority(Some(&offerer))
-                .payer(&offerer)
-                .system_program(&system_program)
-                .plugin(mpl_core::types::Plugin::TransferDelegate(
-                    mpl_core::types::TransferDelegate {},
-                ))
-                .init_authority(mpl_core::types::PluginAuthority::Address {
-                    address: ctx.accounts.settlement_authority.key(),
-                })
-                .invoke()?;
+            let delegate = mpl_core::types::PluginAuthority::Address {
+                address: ctx.accounts.settlement_authority.key(),
+            };
+            // The asset may already carry a TransferDelegate plugin (e.g. a
+            // previous listing). Add it when absent; otherwise re-approve its
+            // authority to the venue's settlement PDA.
+            let existing = mpl_core::fetch_asset_plugin::<mpl_core::types::TransferDelegate>(
+                &asset,
+                mpl_core::types::PluginType::TransferDelegate,
+            );
+            match existing {
+                Err(_) => {
+                    mpl_core::instructions::AddPluginV1CpiBuilder::new(&mpl_core_program)
+                        .asset(&asset)
+                        .collection(Some(&core_collection))
+                        .authority(Some(&offerer))
+                        .payer(&offerer)
+                        .system_program(&system_program)
+                        .plugin(mpl_core::types::Plugin::TransferDelegate(
+                            mpl_core::types::TransferDelegate {},
+                        ))
+                        .init_authority(delegate)
+                        .invoke()?;
+                }
+                Ok((authority, _, _)) if authority != delegate => {
+                    mpl_core::instructions::ApprovePluginAuthorityV1CpiBuilder::new(
+                        &mpl_core_program,
+                    )
+                    .asset(&asset)
+                    .collection(Some(&core_collection))
+                    .authority(Some(&offerer))
+                    .payer(&offerer)
+                    .system_program(&system_program)
+                    .plugin_type(mpl_core::types::PluginType::TransferDelegate)
+                    .new_authority(delegate)
+                    .invoke()?;
+                }
+                Ok(_) => {}
+            }
         }
 
         let order = &mut ctx.accounts.order;
@@ -309,6 +335,37 @@ pub mod medialane_marketplace {
             royalty_amount,
         });
         Ok(())
+    }
+
+    /// Cancel a single open order. Only the order's offerer may cancel; the
+    /// sender IS the authorization.
+    pub fn cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
+        let order = &mut ctx.accounts.order;
+        match order.status {
+            OrderStatus::Created => {}
+            OrderStatus::Filled => return err!(VenueError::OrderAlreadyFilled),
+            OrderStatus::Cancelled => return err!(VenueError::OrderCancelledError),
+        }
+        require!(
+            ctx.accounts.signer.key() == order.offerer,
+            VenueError::CallerNotOfferer
+        );
+        order.status = OrderStatus::Cancelled;
+        emit!(OrderCancelled {
+            order: order.key(),
+            offerer: order.offerer,
+        });
+        Ok(())
+    }
+
+    /// Reclaim a terminal order's rent. Closing frees the PDA seeds;
+    /// re-registering the same salt requires the offerer's own signature and
+    /// constitutes a genuinely new order.
+    pub fn close_order(ctx: Context<CloseOrder>) -> Result<()> {
+        match ctx.accounts.order.status {
+            OrderStatus::Filled | OrderStatus::Cancelled => Ok(()),
+            OrderStatus::Created => err!(VenueError::OrderNotTerminal),
+        }
     }
 
     /// Bulk-cancel: bump the caller's counter, invalidating all of their
@@ -564,6 +621,21 @@ pub struct FulfillOrderSpl<'info> {
     #[account(address = mpl_core::programs::MPL_CORE_ID)]
     pub mpl_core_program: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CancelOrder<'info> {
+    pub signer: Signer<'info>,
+    #[account(mut)]
+    pub order: Account<'info, Order>,
+}
+
+#[derive(Accounts)]
+pub struct CloseOrder<'info> {
+    #[account(mut)]
+    pub offerer: Signer<'info>,
+    #[account(mut, has_one = offerer, close = offerer)]
+    pub order: Account<'info, Order>,
 }
 
 #[derive(Accounts)]

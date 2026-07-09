@@ -184,6 +184,83 @@ DROP_START_BLOCK=8341335
 
 ---
 
+### Creator-Coin (`contracts/Creator-Coin/`)
+
+Permissionless launchpad for **Creator Coins** — a **faithful fork of Keep Starknet
+Strange's audited launchpad framework** (MIT; `LICENSE` in the package). Protocol
+mechanics are preserved verbatim; only the naming is Medialane's (renamed end to end —
+**no `unruggable`/`memecoin` identifiers remain anywhere in the package**).
+
+A coin is created in two steps: (1) deploy a fixed-supply ERC-20 `CreatorCoin` via the
+`Factory`; (2) launch it on Ekubo or Jediswap with transfer-restriction (anti-snipe)
+params and a quote token. **Liquidity is locked** at launch:
+- **Ekubo** (capital-efficient): single-sided-style provision between fixed bounds; the
+  team's quote buys its concentrated allocation back out of the pool to the initial
+  holders; the principal LP position is held by `EkuboLauncher` (**locked**), with pool
+  fees withdrawable by the coin owner.
+- **Jediswap**: creator supplies quote liquidity; the minted LP is sent to the locker
+  for a minimum of 6 months (parametrizable).
+
+- **Status**: faithful fork, fully renamed, build-verified (scarb 2.4.3), **78 unit tests
+  green**, audited (`cairo-auditor`, no Critical/High —
+  `medialane-core/docs/audits/2026-06-03-creator-coin-audit.md`), and **DEPLOYED TO
+  MAINNET 2026-06-04 (Ekubo-only)**. Branch `feat/creator-coin`. Ekubo fork tests were
+  *not* runnable (snforge 0.16 can't fork current mainnet / Sierra 1.7.0) — the Ekubo
+  launch path is validated by unrug's production history + audit + a **team smoke launch
+  (✅ passed 2026-06-04** — tx `0x253e00…233d77`, coin `0x6d42e3…2500a0`; verified
+  is_launched, team alloc distributed, LP locked in EkuboLauncher as EkuboNFT 2287380).
+
+  **Mainnet deployment (2026-06-04, deployer `medialane-deployer`
+  0x06acf…35, via Lava RPC + starknet.js):**
+
+  | Item | Address / hash |
+  |---|---|
+  | **Factory** (entrypoint) | `0x50fa807b5274079fb19374673d7bab6d2dc3af7e1032ea43eb6e44bcbde4c3c` |
+  | **EkuboLauncher** | `0x4f7fceb5ac10f12f9544a09580592e5bdf1b7f04f48765eecf12286d8ccb7b4` |
+  | CreatorCoin class hash | `0x743e4c8a5b96bb83bbf4af04edbbb482d5ece89eed9b729a79fb7df0cd0b6b6` |
+  | EkuboLauncher class hash | `0x701706df0fd3dcac12eb0f810e7142eae7bf2b25fb279259331195e0053e9be` |
+  | Factory class hash | `0x51765926b1344c9a20b8cd4b5abe7b7d47375ae97cf6804db3ea5d4b05a9b55` |
+
+  Factory ctor: `(creator_coin_class_hash, lock_manager=0x0 [unused in Ekubo-only],
+  exchanges=[(Ekubo, launcher)], migrated=[])` → **only Ekubo registered**
+  (`exchange_address(Jediswap)==0`, so its launch path reverts). EkuboLauncher ctor:
+  `(core, registry, positions, router)` with unrug-matched Ekubo addrs (Core
+  `0x00…0325b4b`, Registry `0x0013e258…`, Positions `0x02e0af…`, Router `0x01b6f5…`).
+  Verified on-chain: classes deployed, Ekubo wired, Jediswap disabled. **The deployer is
+  also `CreatorCoin.owner`-eligible only via `create_creator_coin` (permissionless).**
+- **Contracts**: `Factory` (`src/factory/factory.cairo`, the entrypoint), `CreatorCoin`
+  (`src/token/creator_coin.cairo`, ERC-20 + framework fns `is_launched` /
+  `get_team_allocation` / `liquidity_type`), `LockManager`
+  (`src/locker/lock_manager.cairo`, per-lock holder contracts), `EkuboLauncher`
+  (`src/exchanges/ekubo/launcher.cairo`). Also includes Jediswap + StarkDefi adapters.
+- **Provenance / design note**: forked from `keep-starknet-strange/unruggable.meme`
+  `packages/contracts`. ⚠️ The earlier
+  `medialane-core/docs/specs/2026-06-02-creator-coin-CORRECTED-model.md` (non-custodial,
+  no-lock, no-buyback, LP-to-creator) was **scrapped** — it misread the upstream and
+  broke the anti-rug guarantee. The shipped design is the faithful fork above (locker +
+  team buyback). Treat that doc as historical until rewritten.
+
+> **Toolchain note:** this package keeps **unrug's own toolchain** — `starknet 2.4.3` /
+> `openzeppelin 0.8.0` / `snforge_std 0.16.0` (pinned in the package `Scarb.toml`).
+> Each `contracts/*` package is self-contained with its own toolchain (there is no root
+> workspace), so this does not need to match the 2.18 packages. The leftover
+> `.tool-versions` (scarb 2.18) is stale and does not reflect what the package compiles
+> against. Building/testing requires installing scarb ~2.4.3 + starknet-foundry ~0.16.
+
+**Build + test:**
+```bash
+cd contracts/Creator-Coin
+scarb build
+snforge test               # fork tests need an RPC url in [[tool.snforge.fork]]
+snforge test unit_tests    # unit tests need no RPC
+```
+
+**Backend indexing / env vars (post-deploy):** to be mapped against the fork's actual
+factory launch events once the package is finalized and deployed (`CREATOR_COIN_FACTORY_ADDRESS`,
+`CREATOR_COIN_START_BLOCK`).
+
+---
+
 ### Medialane-Protocol-ERC721 (`contracts/Medialane-Protocol-ERC721/`)
 
 > **REDESIGN IN PROGRESS (2026-05-30, branch `feat/marketplace-721-redesign`, NOT yet audited/deployed).**

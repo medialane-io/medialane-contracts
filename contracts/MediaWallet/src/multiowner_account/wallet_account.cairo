@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-use media_wallet::multiowner_account::argent_account::MediaWallet::Event;
+use media_wallet::multiowner_account::wallet_account::MediaWallet::Event;
 
 pub trait IEmitMediaWalletEvent<TContractState> {
     fn emit_event_callback(ref self: TContractState, event: Event);
@@ -17,12 +17,12 @@ pub struct AccountSignature {
 
 #[starknet::contract(account)]
 pub mod MediaWallet {
+    use core::panic_with_felt252;
     use media_wallet::account::{IAccount, IDeprecatedMediaWallet, Version};
     use media_wallet::introspection::src5_component;
     use media_wallet::multiowner_account::account_interface::{
         IMediaWalletAccount, IMediaWalletAccountDispatcher, IMediaWalletAccountDispatcherTrait,
     };
-    use media_wallet::multiowner_account::argent_account::IEmitMediaWalletEvent;
     use media_wallet::multiowner_account::events::{
         AccountCreated, AccountCreatedGuid, EscapeCanceled, EscapeGuardianTriggeredGuid, EscapeOwnerTriggeredGuid,
         EscapeSecurityPeriodChanged, GuardianEscapedGuid, OwnerEscapedGuid, SignerLinked, TransactionExecuted,
@@ -39,6 +39,7 @@ pub mod MediaWallet {
     use media_wallet::multiowner_account::upgrade_migration::{
         IUpgradeMigrationCallback, upgrade_migration_component, upgrade_migration_component::IUpgradeMigrationInternal,
     };
+    use media_wallet::multiowner_account::wallet_account::IEmitMediaWalletEvent;
 
     use media_wallet::offchain_message::IOffChainMessageHashRev1;
     use media_wallet::outside_execution::{
@@ -62,7 +63,6 @@ pub mod MediaWallet {
             assert_correct_deploy_account_version, assert_correct_invoke_version,
         },
     };
-    use core::panic_with_felt252;
     use openzeppelin_security::reentrancyguard::{ReentrancyGuardComponent, ReentrancyGuardComponent::InternalImpl};
     use starknet::{
         ClassHash, ContractAddress, VALIDATED, account::Call, get_block_timestamp, get_contract_address,
@@ -216,7 +216,7 @@ pub mod MediaWallet {
             let tx_info = exec_info.tx_info;
             assert_only_protocol(exec_info.caller_address);
             assert_correct_invoke_version(tx_info.version);
-            assert(tx_info.paymaster_data.is_empty(), 'argent/unsupported-paymaster');
+            assert(tx_info.paymaster_data.is_empty(), 'wallet/unsupported-paymaster');
             if self.session.is_session(tx_info.signature) {
                 self.session.assert_valid_session(calls.span(), tx_info.transaction_hash, tx_info.signature);
             } else {
@@ -278,7 +278,7 @@ pub mod MediaWallet {
                 return array![];
             }
 
-            let calls: Array<Call> = full_deserialize(data.span()).expect('argent/invalid-calls');
+            let calls: Array<Call> = full_deserialize(data.span()).expect('wallet/invalid-calls');
             assert_no_self_call(calls.span(), get_contract_address());
 
             serialize(@execute_multicall_with_result(calls.span()))
@@ -292,11 +292,11 @@ pub mod MediaWallet {
             assert_only_self();
 
             // Downgrade check
-            let argent_dispatcher = IMediaWalletAccountDispatcher { contract_address: get_contract_address() };
-            assert(argent_dispatcher.get_name() == self.get_name(), 'argent/invalid-name');
-            let previous_version = argent_dispatcher.get_version();
-            assert(previous_version >= Version { major: 0, minor: 4, patch: 0 }, 'argent/invalid-from-version');
-            assert(previous_version < self.get_version(), 'argent/downgrade-not-allowed');
+            let wallet_dispatcher = IMediaWalletAccountDispatcher { contract_address: get_contract_address() };
+            assert(wallet_dispatcher.get_name() == self.get_name(), 'wallet/invalid-name');
+            let previous_version = wallet_dispatcher.get_version();
+            assert(previous_version >= Version { major: 0, minor: 4, patch: 0 }, 'wallet/invalid-from-version');
+            assert(previous_version < self.get_version(), 'wallet/downgrade-not-allowed');
 
             self.upgrade.complete_upgrade(new_implementation);
 
@@ -306,7 +306,7 @@ pub mod MediaWallet {
                 return;
             }
 
-            let calls: Array<Call> = full_deserialize(data).expect('argent/invalid-calls');
+            let calls: Array<Call> = full_deserialize(data).expect('wallet/invalid-calls');
             assert_no_self_call(calls.span(), get_contract_address());
             execute_multicall(calls.span());
         }
@@ -374,11 +374,11 @@ pub mod MediaWallet {
     }
 
     #[abi(embed_v0)]
-    impl ArgentMultiOwnerAccountImpl of IMediaWalletAccount<ContractState> {
+    impl MediaWalletAccountImpl of IMediaWalletAccount<ContractState> {
         fn __validate_declare__(self: @ContractState, class_hash: felt252) -> felt252 {
             let tx_info = get_tx_info();
             assert_correct_declare_version(tx_info.version);
-            assert(tx_info.paymaster_data.is_empty(), 'argent/unsupported-paymaster');
+            assert(tx_info.paymaster_data.is_empty(), 'wallet/unsupported-paymaster');
             self.assert_valid_account_signature_raw(tx_info.transaction_hash, tx_info.signature);
             VALIDATED
         }
@@ -392,18 +392,18 @@ pub mod MediaWallet {
         ) -> felt252 {
             let tx_info = get_tx_info();
             assert_correct_deploy_account_version(tx_info.version);
-            assert(tx_info.paymaster_data.is_empty(), 'argent/unsupported-paymaster');
+            assert(tx_info.paymaster_data.is_empty(), 'wallet/unsupported-paymaster');
             self.assert_valid_account_signature_raw(tx_info.transaction_hash, tx_info.signature);
             VALIDATED
         }
 
         fn set_escape_security_period(ref self: ContractState, new_security_period: u64) {
             assert_only_self();
-            assert(new_security_period >= MIN_ESCAPE_SECURITY_PERIOD, 'argent/invalid-security-period');
+            assert(new_security_period >= MIN_ESCAPE_SECURITY_PERIOD, 'wallet/invalid-security-period');
 
             let current_escape_status = self.get_escape_status();
             if current_escape_status == EscapeStatus::NotReady || current_escape_status == EscapeStatus::Ready {
-                panic_with_felt252('argent/ongoing-escape');
+                panic_with_felt252('wallet/ongoing-escape');
             }
             self.clear_escape(escape_canceled: true, reset_timestamps: true);
             self.escape_security_period.write(new_security_period);
@@ -448,7 +448,7 @@ pub mod MediaWallet {
             // no escape if there is a guardian escape triggered by the owner in progress
             let (current_escape, current_escape_status) = self.get_escape_and_status();
             if current_escape.escape_type == EscapeType::Guardian {
-                assert(current_escape_status == EscapeStatus::Expired, 'argent/cannot-override-escape');
+                assert(current_escape_status == EscapeStatus::Expired, 'wallet/cannot-override-escape');
             }
 
             self.clear_escape(escape_canceled: true, reset_timestamps: false);
@@ -488,7 +488,7 @@ pub mod MediaWallet {
 
             // assert_valid_calls_and_signature(...) guarantees that the escape is of the correct type
             let (current_escape, current_escape_status) = self.get_escape_and_status();
-            assert(current_escape_status == EscapeStatus::Ready, 'argent/invalid-escape');
+            assert(current_escape_status == EscapeStatus::Ready, 'wallet/invalid-escape');
 
             // update owner
             let new_owner = current_escape.new_signer.unwrap();
@@ -504,7 +504,7 @@ pub mod MediaWallet {
             // assert_valid_calls_and_signature(...) guarantees that the escape is of the correct type
 
             let (current_escape, current_escape_status) = self.get_escape_and_status();
-            assert(current_escape_status == EscapeStatus::Ready, 'argent/invalid-escape');
+            assert(current_escape_status == EscapeStatus::Ready, 'wallet/invalid-escape');
 
             let new_guardian = current_escape.new_signer;
             self.guardian_manager.complete_guardian_escape(:new_guardian);
@@ -519,7 +519,7 @@ pub mod MediaWallet {
 
         fn cancel_escape(ref self: ContractState) {
             assert_only_self();
-            assert(self.get_escape_status() != EscapeStatus::None, 'argent/invalid-escape');
+            assert(self.get_escape_status() != EscapeStatus::None, 'wallet/invalid-escape');
             self.clear_escape(escape_canceled: true, reset_timestamps: true);
         }
 
@@ -582,7 +582,7 @@ pub mod MediaWallet {
         }
 
         fn isValidSignature(self: @ContractState, hash: felt252, signatures: Array<felt252>) -> felt252 {
-            assert(self.is_valid_signature(hash, signatures) == VALIDATED, 'argent/invalid-signature');
+            assert(self.is_valid_signature(hash, signatures) == VALIDATED, 'wallet/invalid-signature');
             1
         }
     }
@@ -607,8 +607,8 @@ pub mod MediaWallet {
                             assert_valid_escape_parameters(self.last_guardian_trigger_escape_attempt.read());
                             self.last_guardian_trigger_escape_attempt.write(get_block_timestamp());
                         }
-                        let new_owner = full_deserialize::<Signer>(*call.calldata).expect('argent/invalid-calldata');
-                        assert(!self.owner_manager.is_owner(new_owner), 'argent/new-owner-is-owner');
+                        let new_owner = full_deserialize::<Signer>(*call.calldata).expect('wallet/invalid-calldata');
+                        assert(!self.owner_manager.is_owner(new_owner), 'wallet/new-owner-is-owner');
                         // valid guardian signature also asserts that a guardian is set
                         self.guardian_manager.assert_single_guardian_signature(execution_hash, raw_signature);
                         return; // valid
@@ -619,9 +619,9 @@ pub mod MediaWallet {
                             self.last_guardian_escape_attempt.write(get_block_timestamp());
                         }
 
-                        assert((*call.calldata).is_empty(), 'argent/invalid-calldata');
+                        assert((*call.calldata).is_empty(), 'wallet/invalid-calldata');
                         let current_escape = self._escape.read();
-                        assert(current_escape.escape_type == EscapeType::Owner, 'argent/invalid-escape');
+                        assert(current_escape.escape_type == EscapeType::Owner, 'wallet/invalid-escape');
                         // valid guardian signature also asserts that a guardian is set
                         self.guardian_manager.assert_single_guardian_signature(execution_hash, raw_signature);
                         return; // valid
@@ -635,9 +635,9 @@ pub mod MediaWallet {
                         }
 
                         let new_guardian_opt = full_deserialize::<Option<Signer>>(*call.calldata)
-                            .expect('argent/invalid-calldata');
+                            .expect('wallet/invalid-calldata');
                         if let Option::Some(new_guardian) = new_guardian_opt {
-                            assert(!self.guardian_manager.is_guardian(new_guardian), 'argent/new-guardian-is-guardian');
+                            assert(!self.guardian_manager.is_guardian(new_guardian), 'wallet/new-guardian-is-guardian');
                         }
                         self.owner_manager.assert_single_owner_signature(execution_hash, raw_signature);
                         return; // valid
@@ -649,10 +649,10 @@ pub mod MediaWallet {
                             assert_valid_escape_parameters(self.last_owner_escape_attempt.read());
                             self.last_owner_escape_attempt.write(get_block_timestamp());
                         }
-                        assert((*call.calldata).is_empty(), 'argent/invalid-calldata');
+                        assert((*call.calldata).is_empty(), 'wallet/invalid-calldata');
                         let current_escape = self._escape.read();
 
-                        assert(current_escape.escape_type == EscapeType::Guardian, 'argent/invalid-escape');
+                        assert(current_escape.escape_type == EscapeType::Guardian, 'wallet/invalid-escape');
                         self.owner_manager.assert_single_owner_signature(execution_hash, raw_signature);
                         return; // valid
                     }
@@ -662,19 +662,19 @@ pub mod MediaWallet {
                             let (owner_guids_to_remove, _, owner_alive_signature) = full_deserialize::<
                                 (Array<felt252>, Array<Signer>, Option<OwnerAliveSignature>),
                             >(*call.calldata)
-                                .expect('argent/invalid-calldata');
+                                .expect('wallet/invalid-calldata');
 
                             let signer_still_valid = !owner_guids_to_remove
                                 .span()
                                 .contains(account_signature.owner_signature.signer().into_guid());
 
-                            assert(signer_still_valid || owner_alive_signature.is_some(), 'argent/missing-owner-alive');
+                            assert(signer_still_valid || owner_alive_signature.is_some(), 'wallet/missing-owner-alive');
                         }
                         self.assert_valid_account_signature(execution_hash, account_signature);
                         return; // valid
                     }
-                    assert(selector != selector!("execute_after_upgrade"), 'argent/forbidden-call');
-                    assert(selector != selector!("perform_upgrade"), 'argent/forbidden-call');
+                    assert(selector != selector!("execute_after_upgrade"), 'wallet/forbidden-call');
+                    assert(selector != selector!("perform_upgrade"), 'wallet/forbidden-call');
                 }
             } else {
                 // make sure no call is to the account
@@ -691,31 +691,31 @@ pub mod MediaWallet {
             // format is at least 5 items: [array_len, signature_type, signer_pubkey, r, s]
             if raw_signature.len() != 2 && raw_signature.len() != 4 {
                 // Parse regular signature. Manual inlining instead of calling full_deserialize for performance
-                let signature_count = *raw_signature.pop_front().expect('argent/invalid-signature-format');
+                let signature_count = *raw_signature.pop_front().expect('wallet/invalid-signature-format');
                 if signature_count == 1 {
                     let owner_signature: SignerSignature = Serde::deserialize(ref raw_signature)
-                        .expect('argent/invalid-signature-format');
-                    assert(raw_signature.is_empty(), 'argent/invalid-signature-length');
+                        .expect('wallet/invalid-signature-format');
+                    assert(raw_signature.is_empty(), 'wallet/invalid-signature-length');
                     return AccountSignature { owner_signature, guardian_signature: Option::None };
                 } else if signature_count == 2 {
                     let owner_signature: SignerSignature = Serde::deserialize(ref raw_signature)
-                        .expect('argent/invalid-signature-format');
+                        .expect('wallet/invalid-signature-format');
                     let guardian_signature: SignerSignature = Serde::deserialize(ref raw_signature)
-                        .expect('argent/invalid-signature-format');
-                    assert(raw_signature.is_empty(), 'argent/invalid-signature-length');
+                        .expect('wallet/invalid-signature-format');
+                    assert(raw_signature.is_empty(), 'wallet/invalid-signature-length');
                     return AccountSignature { owner_signature, guardian_signature: Option::Some(guardian_signature) };
                 } else {
-                    core::panic_with_felt252('argent/invalid-signature-length');
+                    core::panic_with_felt252('wallet/invalid-signature-length');
                 };
             };
 
             let single_stark_owner = self
                 .owner_manager
                 .get_single_stark_owner_pubkey()
-                .expect('argent/no-single-stark-owner');
+                .expect('wallet/no-single-stark-owner');
             let owner_signature = SignerSignature::Starknet(
                 (
-                    StarknetSigner { pubkey: single_stark_owner.try_into().expect('argent/zero-pubkey') },
+                    StarknetSigner { pubkey: single_stark_owner.try_into().expect('wallet/zero-pubkey') },
                     StarknetSignature {
                         r: *raw_signature.pop_front().unwrap(), s: *raw_signature.pop_front().unwrap(),
                     },
@@ -729,7 +729,7 @@ pub mod MediaWallet {
 
             let guardian_signature = SignerSignature::Starknet(
                 (
-                    StarknetSigner { pubkey: single_stark_guardian.try_into().expect('argent/zero-pubkey') },
+                    StarknetSigner { pubkey: single_stark_guardian.try_into().expect('wallet/zero-pubkey') },
                     StarknetSignature {
                         r: *raw_signature.pop_front().unwrap(), s: *raw_signature.pop_front().unwrap(),
                     },
@@ -744,11 +744,11 @@ pub mod MediaWallet {
 
         #[inline(always)]
         fn assert_valid_account_signature(self: @ContractState, hash: felt252, account_signature: AccountSignature) {
-            assert(self.is_valid_owner_signature(hash, account_signature.owner_signature), 'argent/invalid-owner-sig');
+            assert(self.is_valid_owner_signature(hash, account_signature.owner_signature), 'wallet/invalid-owner-sig');
             if let Option::Some(guardian_signature) = account_signature.guardian_signature {
-                assert(self.is_valid_guardian_signature(hash, guardian_signature), 'argent/invalid-guardian-sig');
+                assert(self.is_valid_guardian_signature(hash, guardian_signature), 'wallet/invalid-guardian-sig');
             } else {
-                assert(!self.guardian_manager.has_guardian(), 'argent/missing-guardian-sig');
+                assert(!self.guardian_manager.has_guardian(), 'wallet/missing-guardian-sig');
             };
         }
 
@@ -756,13 +756,13 @@ pub mod MediaWallet {
         fn assert_valid_owner_alive_signature(self: @ContractState, owner_alive_signature: OwnerAliveSignature) {
             let signature_expiration = owner_alive_signature.signature_expiration;
             let owner_signature = owner_alive_signature.owner_signature;
-            assert(signature_expiration >= get_block_timestamp(), 'argent/expired-signature');
-            assert(signature_expiration - get_block_timestamp() <= ONE_DAY, 'argent/timestamp-too-far-future');
+            assert(signature_expiration >= get_block_timestamp(), 'wallet/expired-signature');
+            assert(signature_expiration - get_block_timestamp() <= ONE_DAY, 'wallet/timestamp-too-far-future');
             let new_owner_guid = owner_signature.signer().into_guid();
-            assert(self.owner_manager.is_owner_guid(new_owner_guid), 'argent/invalid-sig-not-owner');
+            assert(self.owner_manager.is_owner_guid(new_owner_guid), 'wallet/invalid-sig-not-owner');
             let message_hash = OwnerAlive { new_owner_guid, signature_expiration }.get_message_hash_rev_1();
             let is_valid = owner_signature.is_valid_signature(message_hash);
-            assert(is_valid, 'argent/invalid-alive-sig');
+            assert(is_valid, 'wallet/invalid-alive-sig');
         }
 
         fn get_escape_status(self: @ContractState) -> EscapeStatus {
@@ -797,11 +797,11 @@ pub mod MediaWallet {
             // No need for modes other than L1 while escaping
             assert(
                 tx_info.nonce_data_availability_mode == DA_MODE_L1 && tx_info.fee_data_availability_mode == DA_MODE_L1,
-                'argent/invalid-da-mode',
+                'wallet/invalid-da-mode',
             );
 
             // No need to allow self deployment and escaping in one transaction
-            assert(tx_info.account_deployment_data.is_empty(), 'argent/invalid-deployment-data');
+            assert(tx_info.account_deployment_data.is_empty(), 'wallet/invalid-deployment-data');
 
             // Limit the maximum tip and maximum total fee while escaping
             let mut max_fee: u128 = 0;
@@ -814,15 +814,15 @@ pub mod MediaWallet {
                 }
             };
             max_fee += max_tip;
-            assert(max_tip <= MAX_ESCAPE_TIP_STRK, 'argent/tip-too-high');
-            assert(max_fee <= MAX_ESCAPE_MAX_FEE_STRK, 'argent/max-fee-too-high');
+            assert(max_tip <= MAX_ESCAPE_TIP_STRK, 'wallet/tip-too-high');
+            assert(max_fee <= MAX_ESCAPE_MAX_FEE_STRK, 'wallet/max-fee-too-high');
         } else if tx_info.version == TX_V1 || tx_info.version == TX_V1_ESTIMATE {
             // other fields not available on V1
-            assert(tx_info.max_fee <= MAX_ESCAPE_MAX_FEE_ETH, 'argent/max-fee-too-high');
+            assert(tx_info.max_fee <= MAX_ESCAPE_MAX_FEE_ETH, 'wallet/max-fee-too-high');
         } else {
-            panic_with_felt252('argent/invalid-tx-version');
+            panic_with_felt252('wallet/invalid-tx-version');
         }
 
-        assert(get_block_timestamp() > last_timestamp + TIME_BETWEEN_TWO_ESCAPES, 'argent/last-escape-too-recent');
+        assert(get_block_timestamp() > last_timestamp + TIME_BETWEEN_TWO_ESCAPES, 'wallet/last-escape-too-recent');
     }
 }

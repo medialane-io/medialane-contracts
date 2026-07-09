@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0
-use media_wallet::utils::hashing::poseidon_2;
 use core::ecdsa::check_ecdsa_signature;
 use core::hash::{HashStateExTrait, HashStateTrait};
 use core::poseidon::PoseidonTrait;
+use media_wallet::utils::hashing::poseidon_2;
 use starknet::secp256_trait::{
     Secp256PointTrait, Signature as Secp256Signature, is_signature_entry_valid, recover_public_key,
 };
@@ -103,13 +103,13 @@ impl Secp256k1SignerSerde of Serde<Secp256k1Signer> {
 
     fn deserialize(ref serialized: Span<felt252>) -> Option<Secp256k1Signer> {
         let pubkey_hash = Serde::<EthAddress>::deserialize(ref serialized)?;
-        assert(pubkey_hash.into() != 0, 'argent/zero-pubkey-hash');
+        assert(pubkey_hash.into() != 0, 'wallet/zero-pubkey-hash');
         Option::Some(Secp256k1Signer { pubkey_hash })
     }
 }
 
 pub fn starknet_signer_from_pubkey(pubkey: felt252) -> Signer {
-    Signer::Starknet(StarknetSigner { pubkey: pubkey.try_into().expect('argent/zero-pubkey') })
+    Signer::Starknet(StarknetSigner { pubkey: pubkey.try_into().expect('wallet/zero-pubkey') })
 }
 
 #[generate_trait]
@@ -255,25 +255,25 @@ impl U256TryIntoSignerType of TryInto<u256, SignerType> {
 #[inline(always)]
 #[must_use]
 fn is_valid_starknet_signature(hash: felt252, signer: StarknetSigner, signature: StarknetSignature) -> bool {
-    assert(signature.r.into() < STARK_CURVE_ORDER_U256, 'argent/invalid-r-value');
-    assert(signature.s.into() < STARK_CURVE_ORDER_U256, 'argent/invalid-s-value');
+    assert(signature.r.into() < STARK_CURVE_ORDER_U256, 'wallet/invalid-r-value');
+    assert(signature.s.into() < STARK_CURVE_ORDER_U256, 'wallet/invalid-s-value');
     check_ecdsa_signature(hash, signer.pubkey.into(), signature.r, signature.s)
 }
 
 #[must_use]
 pub fn is_valid_secp256k1_signature(hash: u256, pubkey_hash: EthAddress, signature: Secp256Signature) -> bool {
-    assert(signature.s <= SECP_256_K1_HALF, 'argent/malleable-signature');
+    assert(signature.s <= SECP_256_K1_HALF, 'wallet/malleable-signature');
     is_eth_signature_valid(hash, signature, pubkey_hash).is_ok()
 }
 
 #[must_use]
 fn is_valid_secp256r1_signature(hash: u256, signer: Secp256r1Signer, signature: Secp256Signature) -> bool {
     // `recover_public_key` accepts invalid values for r and s, so we need to check them first
-    assert(is_signature_entry_valid::<Secp256r1Point>(signature.r), 'argent/invalid-r-value');
-    assert(is_signature_entry_valid::<Secp256r1Point>(signature.s), 'argent/invalid-s-value');
-    assert(signature.s <= SECP_256_R1_HALF, 'argent/malleable-signature');
-    let recovered = recover_public_key::<Secp256r1Point>(hash, signature).expect('argent/invalid-sig-format');
-    let (recovered_signer, _) = recovered.get_coordinates().expect('argent/invalid-sig-format');
+    assert(is_signature_entry_valid::<Secp256r1Point>(signature.r), 'wallet/invalid-r-value');
+    assert(is_signature_entry_valid::<Secp256r1Point>(signature.s), 'wallet/invalid-s-value');
+    assert(signature.s <= SECP_256_R1_HALF, 'wallet/malleable-signature');
+    let recovered = recover_public_key::<Secp256r1Point>(hash, signature).expect('wallet/invalid-sig-format');
+    let (recovered_signer, _) = recovered.get_coordinates().expect('wallet/invalid-sig-format');
     recovered_signer == signer.pubkey.into()
 }
 

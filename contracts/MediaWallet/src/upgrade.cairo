@@ -15,7 +15,7 @@ pub trait IUpgradeable<TContractState> {
 #[starknet::interface]
 pub trait IUpgradableCallbackOld<TContractState> {
     /// @notice Legacy callback for accounts upgrading from old versions
-    /// @dev Used when upgrading from Argent account <0.4.0 or multisig <0.2.0
+    /// @dev Used when upgrading from account versions <0.4.0
     /// @dev Can only be called by the account itself during upgrade
     /// @param data Implementation-specific upgrade data
     /// @return Arbitrary data depending on target version
@@ -70,7 +70,7 @@ pub mod upgrade_component {
             assert_only_self();
             let supports_interface = ISRC5LibraryDispatcher { class_hash: new_implementation }
                 .supports_interface(SRC5_ACCOUNT_INTERFACE_ID);
-            assert(supports_interface, 'argent/invalid-implementation');
+            assert(supports_interface, 'wallet/invalid-implementation');
             IUpgradableCallbackLibraryDispatcher { class_hash: new_implementation }
                 .perform_upgrade(new_implementation, data.span());
         }
@@ -81,7 +81,7 @@ pub mod upgrade_component {
         /// @notice Completes the upgrade by replacing class hash and emitting event
         /// @dev Should only be called from perform_upgrade
         fn complete_upgrade(ref self: ComponentState<TContractState>, new_implementation: ClassHash) {
-            replace_class_syscall(new_implementation).expect('argent/invalid-upgrade');
+            replace_class_syscall(new_implementation).expect('wallet/invalid-upgrade');
             self.emit(AccountUpgraded { new_implementation });
         }
     }

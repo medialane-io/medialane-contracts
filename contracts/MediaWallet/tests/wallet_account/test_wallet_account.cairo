@@ -1,8 +1,13 @@
+use core::num::traits::Zero;
+use crate::{
+    Felt252TryIntoStarknetSigner, GUARDIAN, ITestMediaWalletDispatcherTrait, OWNER, TX_HASH, initialize_account,
+    initialize_account_with, initialize_account_without_guardian, to_starknet_signatures,
+};
 use media_wallet::multiowner_account::owner_alive::OwnerAliveSignature;
 use media_wallet::multiowner_account::{
-    argent_account::MediaWallet, argent_account::MediaWallet::{MAX_ESCAPE_TIP_STRK, TIME_BETWEEN_TWO_ESCAPES},
     events::{GuardianAddedGuid, GuardianRemovedGuid, OwnerAddedGuid, OwnerRemovedGuid, SignerLinked},
-    guardian_manager::guardian_manager_component, owner_manager::owner_manager_component,
+    guardian_manager::guardian_manager_component, owner_manager::owner_manager_component, wallet_account::MediaWallet,
+    wallet_account::MediaWallet::{MAX_ESCAPE_TIP_STRK, TIME_BETWEEN_TWO_ESCAPES},
 };
 use media_wallet::recovery::EscapeStatus;
 use media_wallet::signer::signer_signature::{
@@ -10,11 +15,6 @@ use media_wallet::signer::signer_signature::{
     starknet_signer_from_pubkey,
 };
 use media_wallet::utils::serialization::serialize;
-use core::num::traits::Zero;
-use crate::{
-    Felt252TryIntoStarknetSigner, GUARDIAN, ITestMediaWalletDispatcherTrait, OWNER, TX_HASH, initialize_account,
-    initialize_account_with, initialize_account_without_guardian, to_starknet_signatures,
-};
 use snforge_std::{
     EventSpyAssertionsTrait, EventSpyTrait,
     signature::{KeyPairTrait, stark_curve::{StarkCurveKeyPairImpl, StarkCurveSignerImpl}}, spy_events,
@@ -33,7 +33,7 @@ fn NEW_OWNER() -> (Signer, OwnerAliveSignature) {
 fn NEW_OWNER_FROM_KEY(key: felt252) -> (Signer, OwnerAliveSignature) {
     let new_owner = KeyPairTrait::from_secret_key(key);
     let (r, s) = new_owner.sign(new_owner_message_hash()).unwrap();
-    let signer = StarknetSigner { pubkey: new_owner.public_key.try_into().expect('argent/zero-pubkey') };
+    let signer = StarknetSigner { pubkey: new_owner.public_key.try_into().expect('wallet/zero-pubkey') };
     (
         Signer::Starknet(signer),
         OwnerAliveSignature {
@@ -46,7 +46,7 @@ fn NEW_OWNER_FROM_KEY(key: felt252) -> (Signer, OwnerAliveSignature) {
 fn new_owner_message_hash() -> felt252 {
     // Hardcoded hash of the message because get_message_hash_rev_1 uses get_contract_address() and we can't mock it
     // To update it go to src/multiowner_account/owner_alive.cairo and print the hash with
-    // hardcoded get_contract_address() to ARGENT_ACCOUNT_ADDRESS
+    // hardcoded get_contract_address() to WALLET_ACCOUNT_ADDRESS
     149168710789768381355964121676254784761481539521088721997114502918124334748
 }
 
@@ -59,7 +59,7 @@ fn initialize() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-tx-version',))]
+#[should_panic(expected: ('wallet/invalid-tx-version',))]
 fn check_transaction_version_on_execute() {
     let account = initialize_account();
     start_cheat_caller_address_global(contract_address_const::<0>());
@@ -68,7 +68,7 @@ fn check_transaction_version_on_execute() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-tx-version',))]
+#[should_panic(expected: ('wallet/invalid-tx-version',))]
 fn check_transaction_version_on_validate() {
     let account = initialize_account();
     start_cheat_caller_address_global(contract_address_const::<0>());
@@ -164,7 +164,7 @@ fn change_owner_with_alive_signature() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-signers-len',))]
+#[should_panic(expected: ('wallet/invalid-signers-len',))]
 fn change_owner_remove_all_owners() {
     let account = initialize_account_without_guardian();
 
@@ -193,7 +193,7 @@ fn change_owners_reset_escape() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/timestamp-too-far-future',))]
+#[should_panic(expected: ('wallet/timestamp-too-far-future',))]
 fn change_owners_too_far_future() {
     let account = initialize_account();
 
@@ -209,7 +209,7 @@ fn change_owners_too_far_future() {
 
 
 #[test]
-#[should_panic(expected: ('argent/only-self',))]
+#[should_panic(expected: ('wallet/only-self',))]
 fn change_owners_only_self() {
     let account = initialize_account();
 
@@ -218,7 +218,7 @@ fn change_owners_only_self() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/expired-signature',))]
+#[should_panic(expected: ('wallet/expired-signature',))]
 fn change_owners_timestamp_expired() {
     let account = initialize_account();
 
@@ -234,7 +234,7 @@ fn change_owners_timestamp_expired() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-alive-sig',))]
+#[should_panic(expected: ('wallet/invalid-alive-sig',))]
 fn change_owners_invalid_signature() {
     let account = initialize_account();
 
@@ -255,7 +255,7 @@ fn change_owners_invalid_signature() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-sig-not-owner',))]
+#[should_panic(expected: ('wallet/invalid-sig-not-owner',))]
 fn change_owners_signature_not_from_owner() {
     let account = initialize_account();
     let (_, signature) = NEW_OWNER();
@@ -266,7 +266,7 @@ fn change_owners_signature_not_from_owner() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/duplicated-guids',))]
+#[should_panic(expected: ('wallet/duplicated-guids',))]
 fn change_owners_duplicates() {
     let account = initialize_account();
     let current_owner = starknet_signer_from_pubkey(OWNER().pubkey);
@@ -306,7 +306,7 @@ fn change_owners_add_twice() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-signers-len',))]
+#[should_panic(expected: ('wallet/invalid-signers-len',))]
 fn change_owners_reach_limits() {
     let account = initialize_account();
 
@@ -387,7 +387,7 @@ fn change_guardians_remove_all_guardians() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-signers-len',))]
+#[should_panic(expected: ('wallet/invalid-signers-len',))]
 fn change_guardians_reach_limits() {
     let account = initialize_account();
 
@@ -422,7 +422,7 @@ fn change_guardians_add_twice() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/duplicated-guids',))]
+#[should_panic(expected: ('wallet/duplicated-guids',))]
 fn change_guardians_duplicates() {
     let account = initialize_account();
     let guardian = starknet_signer_from_pubkey(GUARDIAN().pubkey);
@@ -431,7 +431,7 @@ fn change_guardians_duplicates() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/only-self',))]
+#[should_panic(expected: ('wallet/only-self',))]
 fn change_guardians_only_self() {
     let account = initialize_account();
     let guardian = starknet_signer_from_pubkey(22);
@@ -440,7 +440,7 @@ fn change_guardians_only_self() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/multiple-owners',))]
+#[should_panic(expected: ('wallet/multiple-owners',))]
 fn get_owner_multiple_owners() {
     let account = initialize_account();
     let signer = starknet_signer_from_pubkey(22);
@@ -455,7 +455,7 @@ fn get_owner_multiple_owners() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/multiple-owners',))]
+#[should_panic(expected: ('wallet/multiple-owners',))]
 fn get_owner_type_multiple_owners() {
     let account = initialize_account();
     let signer = starknet_signer_from_pubkey(22);
@@ -470,7 +470,7 @@ fn get_owner_type_multiple_owners() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/multiple-owners',))]
+#[should_panic(expected: ('wallet/multiple-owners',))]
 fn get_owner_guid_multiple_owners() {
     let account = initialize_account();
     let signer = starknet_signer_from_pubkey(22);
@@ -493,7 +493,7 @@ fn get_guardian() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/multiple-guardians',))]
+#[should_panic(expected: ('wallet/multiple-guardians',))]
 fn get_guardian_multiple_guardians() {
     let account = initialize_account();
     let signer = starknet_signer_from_pubkey(22);
@@ -529,7 +529,7 @@ fn get_guardian_type_no_guardian() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/multiple-guardians',))]
+#[should_panic(expected: ('wallet/multiple-guardians',))]
 fn get_guardian_type_multiple_guardians() {
     let account = initialize_account();
     let signer = starknet_signer_from_pubkey(22);
@@ -557,7 +557,7 @@ fn get_guardian_guid_no_guardian() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/multiple-guardians',))]
+#[should_panic(expected: ('wallet/multiple-guardians',))]
 fn get_guardian_guid_multiple_guardians() {
     let account = initialize_account();
     let signer = starknet_signer_from_pubkey(22);
@@ -628,7 +628,7 @@ fn supportsInterface() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/non-null-caller',))]
+#[should_panic(expected: ('wallet/non-null-caller',))]
 fn cant_call_validate() {
     let account = initialize_account();
     start_cheat_caller_address_global(contract_address_const::<42>());
@@ -636,7 +636,7 @@ fn cant_call_validate() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/zero-pubkey-hash',))]
+#[should_panic(expected: ('wallet/zero-pubkey-hash',))]
 fn test_signer_secp256k1_wrong_pubkey_hash() {
     let account = initialize_account();
 
@@ -646,7 +646,7 @@ fn test_signer_secp256k1_wrong_pubkey_hash() {
 
 
 #[test]
-#[should_panic(expected: ('argent/tip-too-high',))]
+#[should_panic(expected: ('wallet/tip-too-high',))]
 fn test_max_tip() {
     let account = initialize_account();
 

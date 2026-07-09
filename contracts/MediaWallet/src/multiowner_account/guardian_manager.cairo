@@ -5,7 +5,7 @@ use media_wallet::signer::signer_signature::{Signer, SignerInfo, SignerSignature
 pub trait IGuardianManager<TContractState> {
     /// @notice Returns the public key of the single guardian or 0 if there are no guardians
     /// @dev Reverts if there are multiple guardians
-    /// @dev Reverts if there is just one guardian but its type is not Starknet, Eip191 or Secp256k1
+    /// @dev Reverts if there is just one guardian but its type is not Starknet or Secp256k1
     fn get_guardian(self: @TContractState) -> felt252;
 
     /// @notice Returns the GUID of the single guardian or None if there are no guardians
@@ -42,10 +42,10 @@ pub mod guardian_manager_component {
     use media_wallet::linked_set::linked_set_with_head::{
         LinkedSetWithHead, LinkedSetWithHeadReadImpl, LinkedSetWithHeadWriteImpl, MutableLinkedSetWithHeadReadImpl,
     };
-    use media_wallet::multiowner_account::argent_account::MediaWallet::Event as MediaWalletEvent;
-    use media_wallet::multiowner_account::argent_account::IEmitMediaWalletEvent;
     use media_wallet::multiowner_account::events::{GuardianAddedGuid, GuardianRemovedGuid, SignerLinked};
     use media_wallet::multiowner_account::signer_storage_linked_set::SignerStorageValueLinkedSetConfig;
+    use media_wallet::multiowner_account::wallet_account::IEmitMediaWalletEvent;
+    use media_wallet::multiowner_account::wallet_account::MediaWallet::Event as MediaWalletEvent;
     use media_wallet::signer::signer_signature::{
         Signer, SignerInfo, SignerSignature, SignerSignatureTrait, SignerStorageTrait, SignerStorageValue, SignerTrait,
         SignerType, StarknetSignature, StarknetSigner,
@@ -103,7 +103,7 @@ pub mod guardian_manager_component {
         // legacy
         fn get_guardian(self: @ComponentState<TContractState>) -> felt252 {
             if let Option::Some(guardian) = self.get_single_or_no_guardian() {
-                assert(!guardian.is_stored_as_guid(), 'argent/only_guid');
+                assert(!guardian.is_stored_as_guid(), 'wallet/only_guid');
                 guardian.stored_value
             } else {
                 // No guardians
@@ -137,7 +137,7 @@ pub mod guardian_manager_component {
         }
 
         fn migrate_guardians_storage(ref self: ComponentState<TContractState>, guardians: Array<SignerStorageValue>) {
-            assert(self.guardians_storage.is_empty(), 'argent/guardians-already-init');
+            assert(self.guardians_storage.is_empty(), 'wallet/guardians-already-init');
 
             self.assert_valid_guardian_count(guardians.len());
             for guardian in guardians {
@@ -147,7 +147,7 @@ pub mod guardian_manager_component {
         }
 
         fn assert_guardian_set(self: @ComponentState<TContractState>) {
-            assert(self.has_guardian(), 'argent/guardian-required');
+            assert(self.has_guardian(), 'wallet/guardian-required');
         }
 
         fn has_guardian(self: @ComponentState<TContractState>) -> bool {
@@ -159,7 +159,7 @@ pub mod guardian_manager_component {
             if !self.has_guardian() {
                 return Option::None;
             } else {
-                return Option::Some(self.guardians_storage.single().expect('argent/multiple-guardians'));
+                return Option::Some(self.guardians_storage.single().expect('wallet/multiple-guardians'));
             }
         }
 
@@ -167,9 +167,9 @@ pub mod guardian_manager_component {
             self
                 .guardians_storage
                 .single()
-                .expect('argent/no-single-guardian')
+                .expect('wallet/no-single-guardian')
                 .starknet_pubkey_or_none()
-                .expect('argent/not-strk-guardian')
+                .expect('wallet/not-strk-guardian')
         }
 
         fn change_guardians(
@@ -193,7 +193,7 @@ pub mod guardian_manager_component {
             ref self: ComponentState<TContractState>, new_guardian: Option<SignerStorageValue>,
         ) {
             let guardians_to_add = if let Option::Some(new_guardian) = new_guardian {
-                assert(!self.is_guardian_guid(new_guardian.into_guid()), 'argent/new-guardian-is-guardian');
+                assert(!self.is_guardian_guid(new_guardian.into_guid()), 'wallet/new-guardian-is-guardian');
                 array![new_guardian]
             } else {
                 array![]
@@ -213,7 +213,7 @@ pub mod guardian_manager_component {
         ) {
             let guardian_signature = self.parse_single_guardian_signature(raw_signature);
             let is_valid = self.is_valid_guardian_signature(hash, guardian_signature);
-            assert(is_valid, 'argent/invalid-guardian-sig');
+            assert(is_valid, 'wallet/invalid-guardian-sig');
         }
     }
 
@@ -226,14 +226,14 @@ pub mod guardian_manager_component {
         ) -> SignerSignature {
             if raw_signature.len() != 2 {
                 let signature_array: Array<SignerSignature> = full_deserialize(raw_signature)
-                    .expect('argent/invalid-signature-format');
-                assert(signature_array.len() == 1, 'argent/invalid-signature-length');
+                    .expect('wallet/invalid-signature-format');
+                assert(signature_array.len() == 1, 'wallet/invalid-signature-length');
                 return *signature_array.at(0);
             }
             let single_stark_guardian = self.get_single_stark_guardian_pubkey();
             return SignerSignature::Starknet(
                 (
-                    StarknetSigner { pubkey: single_stark_guardian.try_into().expect('argent/zero-pubkey') },
+                    StarknetSigner { pubkey: single_stark_guardian.try_into().expect('wallet/zero-pubkey') },
                     StarknetSignature {
                         r: *raw_signature.pop_front().unwrap(), s: *raw_signature.pop_front().unwrap(),
                     },
@@ -255,7 +255,7 @@ pub mod guardian_manager_component {
             };
 
             for guardian in guardians_to_add {
-                assert(!guardian_to_remove_span.contains(guardian.into_guid()), 'argent/duplicated-guids');
+                assert(!guardian_to_remove_span.contains(guardian.into_guid()), 'wallet/duplicated-guids');
                 let guardian_guid = self.guardians_storage.insert(guardian);
                 self.emit_guardian_added(guardian_guid);
             };
@@ -264,7 +264,7 @@ pub mod guardian_manager_component {
         }
 
         fn assert_valid_guardian_count(self: @ComponentState<TContractState>, signers_len: usize) {
-            assert(signers_len <= MAX_SIGNERS_COUNT, 'argent/invalid-signers-len');
+            assert(signers_len <= MAX_SIGNERS_COUNT, 'wallet/invalid-signers-len');
         }
 
         fn emit_signer_linked_event(ref self: ComponentState<TContractState>, event: SignerLinked) {

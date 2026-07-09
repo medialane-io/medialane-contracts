@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-use media_wallet::multiowner_account::argent_account::AccountSignature;
+use media_wallet::multiowner_account::wallet_account::AccountSignature;
 use media_wallet::signer::signer_signature::{Signer, SignerSignature};
 /// @notice Configuration for a session that allows a session key to execute transactions
 /// @dev The session must have an authorization to be usable. The authorization is a signature over the session by one
@@ -77,6 +77,9 @@ pub mod session_component {
     use alexandria_merkle_tree::merkle_tree::{
         Hasher, MerkleTree, MerkleTreeImpl, MerkleTreeTrait, poseidon::PoseidonHasherImpl,
     };
+    use core::hash::{HashStateExTrait, HashStateTrait};
+
+    use core::poseidon::PoseidonTrait;
     use media_wallet::account::IAccount;
     use media_wallet::session::{
         session::{ISessionCallback, ISessionable, SessionToken},
@@ -87,9 +90,6 @@ pub mod session_component {
         asserts::{assert_no_self_call, assert_only_self}, serialization::full_deserialize,
         transaction_version::is_estimate_transaction,
     };
-    use core::hash::{HashStateExTrait, HashStateTrait};
-
-    use core::poseidon::PoseidonTrait;
     use starknet::storage::{StorageMapReadAccess, StorageMapWriteAccess};
     use starknet::{account::Call, get_block_timestamp, get_contract_address, storage::Map};
 

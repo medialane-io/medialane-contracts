@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0
-use media_wallet::signer::signer_signature::SignerStorageValue;
 use core::starknet::storage_access::StorePacking;
+use media_wallet::signer::signer_signature::SignerStorageValue;
 
 /// @notice Represents the type of escape in progress
 #[derive(Drop, Copy, Serde, PartialEq, Default)]

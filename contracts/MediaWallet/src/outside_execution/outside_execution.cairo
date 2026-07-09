@@ -153,16 +153,16 @@ pub mod outside_execution_component {
             reentrancy_guard.start();
 
             if outside_execution.caller.into() != 'ANY_CALLER' {
-                assert(get_caller_address() == outside_execution.caller, 'argent/invalid-caller');
+                assert(get_caller_address() == outside_execution.caller, 'wallet/invalid-caller');
             }
 
             let block_timestamp = get_block_timestamp();
             assert(
                 outside_execution.execute_after < block_timestamp && block_timestamp < outside_execution.execute_before,
-                'argent/invalid-timestamp',
+                'wallet/invalid-timestamp',
             );
             let nonce = outside_execution.nonce;
-            assert(!self.outside_nonces.read(nonce), 'argent/duplicated-outside-nonce');
+            assert(!self.outside_nonces.read(nonce), 'wallet/duplicated-outside-nonce');
             self.outside_nonces.write(nonce, true);
             let mut state = self.get_contract_mut();
             let result = state.execute_from_outside_callback(outside_execution.calls, outside_tx_hash, signature);

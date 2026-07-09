@@ -9,7 +9,7 @@ fn test_assert_only_self() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/only-self',))]
+#[should_panic(expected: ('wallet/only-self',))]
 fn test_assert_only_self_panic() {
     start_cheat_caller_address_global(contract_address_const::<42>());
     asserts::assert_only_self();
@@ -41,7 +41,7 @@ fn test_no_self_call_2() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/no-multicall-to-self',))]
+#[should_panic(expected: ('wallet/no-multicall-to-self',))]
 fn test_no_self_call_invalid() {
     let self = contract_address_const::<42>();
     start_cheat_caller_address_global(self);
@@ -50,7 +50,7 @@ fn test_no_self_call_invalid() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/no-multicall-to-self',))]
+#[should_panic(expected: ('wallet/no-multicall-to-self',))]
 fn test_no_self_call_invalid_2() {
     let self = contract_address_const::<42>();
     start_cheat_caller_address_global(self);

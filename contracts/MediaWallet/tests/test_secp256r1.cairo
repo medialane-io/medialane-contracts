@@ -73,7 +73,7 @@ fn test_successful_verification_high_odd() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-r-value',))]
+#[should_panic(expected: ('wallet/invalid-r-value',))]
 fn test_high_r() {
     validateR1Signature(
         0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, sig_s_low_even, true, message_hash_low_even,
@@ -81,13 +81,13 @@ fn test_high_r() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-r-value',))]
+#[should_panic(expected: ('wallet/invalid-r-value',))]
 fn test_0_r() {
     validateR1Signature(0, sig_s_low_even, true, message_hash_low_even);
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-s-value',))]
+#[should_panic(expected: ('wallet/invalid-s-value',))]
 fn test_high_s() {
     validateR1Signature(
         sig_r_low_even, 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, true, message_hash_low_even,
@@ -95,7 +95,7 @@ fn test_high_s() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-s-value',))]
+#[should_panic(expected: ('wallet/invalid-s-value',))]
 fn test_0_s() {
     validateR1Signature(sig_r_low_even, 0, true, message_hash_low_even);
 }

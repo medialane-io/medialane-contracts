@@ -1,13 +1,13 @@
+use crate::KeyAndSig;
 use media_wallet::signer::signer_signature::{SignerSignature, StarknetSignature, StarknetSigner};
 use media_wallet::utils::serialization::serialize;
-use crate::KeyAndSig;
 
 /// converts an array like [pubkey_1, r_1, s_1, pubkey_2, r_2, s_2] into an array [Signature1, Signature2]
 pub fn to_starknet_signer_signatures(arr: Array<felt252>) -> Array<felt252> {
     let mut signatures = array![];
     let mut arr = arr.span();
     while let Option::Some(item) = arr.pop_front() {
-        let pubkey = (*item).try_into().expect('argent/zero-pubkey');
+        let pubkey = (*item).try_into().expect('wallet/zero-pubkey');
         let r = *arr.pop_front().unwrap();
         let s = *arr.pop_front().unwrap();
         signatures.append(SignerSignature::Starknet((pubkey, StarknetSignature { r, s })));
@@ -21,7 +21,7 @@ pub fn to_starknet_signatures(arr: Array<KeyAndSig>) -> Array<felt252> {
     let mut signatures = array![];
     let mut arr = arr.span();
     for item in arr {
-        let pubkey = (*item.pubkey).try_into().expect('argent/zero-pubkey');
+        let pubkey = (*item.pubkey).try_into().expect('wallet/zero-pubkey');
         let StarknetSignature { r, s } = *item.sig;
         signatures.append(SignerSignature::Starknet((pubkey, StarknetSignature { r, s })));
     };

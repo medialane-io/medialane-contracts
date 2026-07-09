@@ -1,5 +1,4 @@
-use media_wallet::signer::signer_signature::STARK_CURVE_ORDER_U256;
-use crate::setup::argent_account_setup::{
+use crate::setup::wallet_account_setup::{
     ITestMediaWalletDispatcher, ITestMediaWalletSafeDispatcher, ITestMediaWalletSafeDispatcherTrait,
 };
 use crate::{
@@ -7,6 +6,7 @@ use crate::{
     WRONG_OWNER, initialize_account, initialize_account_without_guardian, to_starknet_signatures,
     to_starknet_signer_signatures,
 };
+use media_wallet::signer::signer_signature::STARK_CURVE_ORDER_U256;
 use starknet::VALIDATED;
 
 #[generate_trait]
@@ -72,38 +72,38 @@ fn invalid_owner_with_invalid_guardian() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-signature-format',))]
+#[should_panic(expected: ('wallet/invalid-signature-format',))]
 fn invalid_empty_signature_without_guardian() {
     initialize_account_without_guardian().is_valid_signature(TX_HASH, array![]);
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-guardian-sig',))]
+#[should_panic(expected: ('wallet/invalid-guardian-sig',))]
 fn invalid_signature_length_without_guardian() {
     let account = initialize_account_without_guardian();
     account.is_valid_signature(TX_HASH, to_starknet_signatures(array![OWNER(), GUARDIAN()]));
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-signature-format',))]
+#[should_panic(expected: ('wallet/invalid-signature-format',))]
 fn invalid_empty_signature_with_guardian() {
     initialize_account().is_valid_signature(TX_HASH, array![]);
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-signature-length',))]
+#[should_panic(expected: ('wallet/invalid-signature-length',))]
 fn invalid_empty_span_signature() {
     initialize_account().is_valid_signature(TX_HASH, array![0]);
 }
 
 #[test]
-#[should_panic(expected: ('argent/missing-guardian-sig',))]
+#[should_panic(expected: ('wallet/missing-guardian-sig',))]
 fn invalid_signature_length_with_guardian() {
     initialize_account().is_valid_signature(TX_HASH, to_starknet_signatures(array![OWNER()]));
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-r-value',))]
+#[should_panic(expected: ('wallet/invalid-r-value',))]
 fn test_stark_curve_order_r() {
     initialize_account_without_guardian()
         .is_valid_signature(
@@ -113,7 +113,7 @@ fn test_stark_curve_order_r() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-s-value',))]
+#[should_panic(expected: ('wallet/invalid-s-value',))]
 fn test_stark_curve_order_s() {
     initialize_account_without_guardian()
         .is_valid_signature(

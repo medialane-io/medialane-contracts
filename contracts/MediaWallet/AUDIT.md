@@ -24,6 +24,10 @@ See `FORK.md` for the exact commit and audit reference.
 | `ArgentAccountEvent` | `MediaWalletEvent` |
 | Package name `argent` | `media_wallet` |
 | All `argent::` import paths | `media_wallet::` |
+| Error short-string prefix `'argent/…'` | `'wallet/…'` (same length — every string stays ≤ 31 chars; no logic change) |
+| `src/multiowner_account/argent_account.cairo` | `src/multiowner_account/wallet_account.cairo` (file/module rename; contract was already `MediaWallet`) |
+| `tests/argent_account/`, `tests/setup/argent_account_setup.cairo`, `ARGENT_ACCOUNT_ADDRESS` | `tests/wallet_account/`, `tests/setup/wallet_account_setup.cairo`, `WALLET_ACCOUNT_ADDRESS` |
+| Doc comments naming the removed `Eip191` variant | reference only the retained signer types |
 
 GPL-3.0 SPDX headers added to all `src/` files.
 
@@ -52,7 +56,7 @@ Permissionless factory for deterministic `MediaWallet` deployment.
 
 ## Unchanged (covered by Argent audit)
 
-- `src/multiowner_account/argent_account.cairo` → `MediaWallet` contract (rename only)
+- `src/multiowner_account/wallet_account.cairo` — the `MediaWallet` contract (rename only)
 - `src/multiowner_account/owner_manager.cairo` — owner linked list component
 - `src/multiowner_account/guardian_manager.cairo` — guardian component
 - `src/multiowner_account/recovery.cairo` — escape struct and types

@@ -1,3 +1,4 @@
+use crate::{GUARDIAN, OWNER, WALLET_ACCOUNT_ADDRESS};
 use media_wallet::account::Version;
 
 use media_wallet::multiowner_account::owner_alive::OwnerAliveSignature;
@@ -5,7 +6,6 @@ use media_wallet::multiowner_account::recovery::Escape;
 use media_wallet::recovery::{EscapeStatus};
 use media_wallet::signer::signer_signature::{Signer, SignerInfo, SignerType, starknet_signer_from_pubkey};
 use media_wallet::utils::serialization::serialize;
-use crate::{ARGENT_ACCOUNT_ADDRESS, GUARDIAN, OWNER};
 use snforge_std::{ContractClassTrait, DeclareResultTrait, declare, start_cheat_caller_address_global};
 use starknet::account::Call;
 
@@ -78,10 +78,10 @@ pub fn initialize_account_with(owner: felt252, guardian: felt252) -> ITestMediaW
 
     let contract = declare("MediaWallet").expect('Failed to declare MediaWallet').contract_class();
     let (contract_address, _) = contract
-        .deploy_at(@serialize(@constructor_args), ARGENT_ACCOUNT_ADDRESS.try_into().unwrap())
+        .deploy_at(@serialize(@constructor_args), WALLET_ACCOUNT_ADDRESS.try_into().unwrap())
         .expect('Failed to deploy MediaWallet');
 
-    // This will set the caller for subsequent calls (avoid 'argent/only-self')
+    // This will set the caller for subsequent calls (avoid 'wallet/only-self')
     start_cheat_caller_address_global(contract_address);
     ITestMediaWalletDispatcher { contract_address }
 }

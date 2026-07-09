@@ -11,26 +11,21 @@ use starknet::ContractAddress;
 // Starknet contract address prefix constant
 const CONTRACT_ADDRESS_PREFIX: felt252 = 'STARKNET_CONTRACT_ADDRESS';
 // 2**251 - 256
-const L2_ADDRESS_UPPER_BOUND: felt252 =
-    0x7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00;
+const L2_ADDRESS_UPPER_BOUND: felt252 = 0x7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00;
 
 #[starknet::interface]
 pub trait IMediaWalletFactory<TContractState> {
-    fn deploy_wallet(
-        ref self: TContractState, owner_pubkey: felt252, salt: felt252,
-    ) -> ContractAddress;
-    fn compute_address(
-        self: @TContractState, owner_pubkey: felt252, salt: felt252,
-    ) -> ContractAddress;
+    fn deploy_wallet(ref self: TContractState, owner_pubkey: felt252, salt: felt252) -> ContractAddress;
+    fn compute_address(self: @TContractState, owner_pubkey: felt252, salt: felt252) -> ContractAddress;
     fn wallet_class_hash(self: @TContractState) -> ClassHash;
 }
 
 #[starknet::contract]
 pub mod MediaWalletFactory {
-    use starknet::{ClassHash, ContractAddress, SyscallResultTrait};
-    use starknet::syscalls::deploy_syscall;
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
-    use super::{compute_wallet_address, build_constructor_calldata};
+    use starknet::syscalls::deploy_syscall;
+    use starknet::{ClassHash, ContractAddress, SyscallResultTrait};
+    use super::{build_constructor_calldata, compute_wallet_address};
 
     #[storage]
     struct Storage {
@@ -44,18 +39,14 @@ pub mod MediaWalletFactory {
 
     #[abi(embed_v0)]
     impl MediaWalletFactoryImpl of super::IMediaWalletFactory<ContractState> {
-        fn deploy_wallet(
-            ref self: ContractState, owner_pubkey: felt252, salt: felt252,
-        ) -> ContractAddress {
+        fn deploy_wallet(ref self: ContractState, owner_pubkey: felt252, salt: felt252) -> ContractAddress {
             let class_hash = self.wallet_class_hash.read();
             let calldata = build_constructor_calldata(owner_pubkey);
             let (address, _) = deploy_syscall(class_hash, salt, calldata, true).unwrap_syscall();
             address
         }
 
-        fn compute_address(
-            self: @ContractState, owner_pubkey: felt252, salt: felt252,
-        ) -> ContractAddress {
+        fn compute_address(self: @ContractState, owner_pubkey: felt252, salt: felt252) -> ContractAddress {
             let class_hash = self.wallet_class_hash.read();
             let calldata = build_constructor_calldata(owner_pubkey);
             compute_wallet_address(salt, class_hash, calldata)

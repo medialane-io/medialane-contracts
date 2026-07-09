@@ -1,7 +1,7 @@
-use media_wallet::multiowner_account::{argent_account::MediaWallet, events::EscapeSecurityPeriodChanged};
+use crate::{Felt252TryIntoStarknetSigner, ITestMediaWalletDispatcherTrait, initialize_account};
+use media_wallet::multiowner_account::{events::EscapeSecurityPeriodChanged, wallet_account::MediaWallet};
 use media_wallet::recovery::EscapeStatus;
 use media_wallet::signer::signer_signature::starknet_signer_from_pubkey;
-use crate::{Felt252TryIntoStarknetSigner, ITestMediaWalletDispatcherTrait, initialize_account};
 use snforge_std::{
     EventSpyAssertionsTrait, EventSpyTrait, spy_events, start_cheat_block_timestamp_global,
     start_cheat_caller_address_global,
@@ -30,7 +30,7 @@ fn set_escape_security_period() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/ongoing-escape',))]
+#[should_panic(expected: ('wallet/ongoing-escape',))]
 fn set_escape_security_period_with_not_ready_escape() {
     let account = initialize_account();
     account.trigger_escape_guardian(Option::None);
@@ -43,7 +43,7 @@ fn set_escape_security_period_with_not_ready_escape() {
 
 
 #[test]
-#[should_panic(expected: ('argent/ongoing-escape',))]
+#[should_panic(expected: ('wallet/ongoing-escape',))]
 fn set_escape_security_period_with_ready_escape() {
     let account = initialize_account();
     account.trigger_escape_guardian(Option::None);
@@ -103,7 +103,7 @@ fn set_escape_security_period_get_escape_status() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/only-self',))]
+#[should_panic(expected: ('wallet/only-self',))]
 fn set_escape_security_period_outside() {
     let account = initialize_account();
     start_cheat_caller_address_global('another caller'.try_into().unwrap());
@@ -111,14 +111,14 @@ fn set_escape_security_period_outside() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-security-period',))]
+#[should_panic(expected: ('wallet/invalid-security-period',))]
 fn set_escape_security_period__to_zero() {
     let account = initialize_account();
     account.set_escape_security_period(0);
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-escape',))]
+#[should_panic(expected: ('wallet/invalid-escape',))]
 fn set_escape_security_period_escape_too_early() {
     let account = initialize_account();
     account.set_escape_security_period(4200);
@@ -141,7 +141,7 @@ fn set_escape_security_period_escape_escape() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/invalid-escape',))]
+#[should_panic(expected: ('wallet/invalid-escape',))]
 fn set_escape_security_period_escape_escape_too_late() {
     let account = initialize_account();
     account.set_escape_security_period(4200);

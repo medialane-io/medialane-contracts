@@ -13,9 +13,7 @@ fn deploy_factory(wallet_class_hash: felt252) -> IMediaWalletFactoryDispatcher {
 fn test_wallet_class_hash_is_fixed() {
     let mock_class_hash: felt252 = 0x5678;
     let factory = deploy_factory(mock_class_hash);
-    assert(
-        factory.wallet_class_hash() == mock_class_hash.try_into().unwrap(), 'class hash mismatch',
-    );
+    assert(factory.wallet_class_hash() == mock_class_hash.try_into().unwrap(), 'class hash mismatch');
 }
 
 #[test]

@@ -5,7 +5,7 @@ use media_wallet::signer::signer_signature::{Signer, SignerInfo, SignerSignature
 pub trait IOwnerManager<TContractState> {
     /// @notice Returns the public key of the single owner
     /// @dev Reverts if there is more than one owner
-    /// @dev Reverts if owner type is not Starknet, Eip191 or Secp256k1
+    /// @dev Reverts if owner type is not Starknet or Secp256k1
     fn get_owner(self: @TContractState) -> felt252;
 
     /// @notice Returns the signer type of the single owner
@@ -42,10 +42,10 @@ pub mod owner_manager_component {
     use media_wallet::linked_set::linked_set_with_head::{
         LinkedSetWithHead, LinkedSetWithHeadReadImpl, LinkedSetWithHeadWriteImpl, MutableLinkedSetWithHeadReadImpl,
     };
-    use media_wallet::multiowner_account::argent_account::MediaWallet::Event as MediaWalletEvent;
-    use media_wallet::multiowner_account::argent_account::IEmitMediaWalletEvent;
     use media_wallet::multiowner_account::events::{OwnerAddedGuid, OwnerRemovedGuid, SignerLinked};
     use media_wallet::multiowner_account::signer_storage_linked_set::SignerStorageValueLinkedSetConfig;
+    use media_wallet::multiowner_account::wallet_account::IEmitMediaWalletEvent;
+    use media_wallet::multiowner_account::wallet_account::MediaWallet::Event as MediaWalletEvent;
     use media_wallet::signer::signer_signature::{
         Signer, SignerInfo, SignerSignature, SignerSignatureTrait, SignerStorageTrait, SignerStorageValue, SignerTrait,
         SignerType, StarknetSignature, StarknetSigner,
@@ -75,17 +75,17 @@ pub mod owner_manager_component {
         TContractState, +HasComponent<TContractState>, +Drop<TContractState>, +IEmitMediaWalletEvent<TContractState>,
     > of IOwnerManager<ComponentState<TContractState>> {
         fn get_owner(self: @ComponentState<TContractState>) -> felt252 {
-            let owner = self.get_single_owner().expect('argent/multiple-owners');
-            assert(!owner.is_stored_as_guid(), 'argent/only_guid');
+            let owner = self.get_single_owner().expect('wallet/multiple-owners');
+            assert(!owner.is_stored_as_guid(), 'wallet/only_guid');
             owner.stored_value
         }
 
         fn get_owner_type(self: @ComponentState<TContractState>) -> SignerType {
-            self.get_single_owner().expect('argent/multiple-owners').signer_type
+            self.get_single_owner().expect('wallet/multiple-owners').signer_type
         }
 
         fn get_owner_guid(self: @ComponentState<TContractState>) -> felt252 {
-            self.get_single_owner().expect('argent/multiple-owners').into_guid()
+            self.get_single_owner().expect('wallet/multiple-owners').into_guid()
         }
 
         fn get_owners_guids(self: @ComponentState<TContractState>) -> Array<felt252> {
@@ -131,7 +131,7 @@ pub mod owner_manager_component {
 
         fn initialize_from_upgrade(ref self: ComponentState<TContractState>, signer_storage: SignerStorageValue) {
             // Sanity check
-            assert(self.owners_storage.len() == 0, 'argent/already-initialized');
+            assert(self.owners_storage.len() == 0, 'wallet/already-initialized');
             let guid = self.owners_storage.insert(signer_storage);
             // SignerLinked event is not needed here but OwnerAddedGuid is needed
             self.emit_owner_added(guid);
@@ -164,7 +164,7 @@ pub mod owner_manager_component {
         }
 
         fn complete_owner_escape(ref self: ComponentState<TContractState>, new_owner: SignerStorageValue) {
-            assert(!self.is_owner_guid(new_owner.into_guid()), 'argent/new-owner-is-owner');
+            assert(!self.is_owner_guid(new_owner.into_guid()), 'wallet/new-owner-is-owner');
             self
                 .change_owners_using_storage(
                     owner_guids_to_remove: self.owners_storage.get_all_hashes(), owners_to_add: array![new_owner],
@@ -176,7 +176,7 @@ pub mod owner_manager_component {
         ) {
             let owner_signature = self.parse_single_owner_signature(raw_signature);
             let is_valid = self.is_valid_owner_signature(hash, owner_signature);
-            assert(is_valid, 'argent/invalid-owner-sig');
+            assert(is_valid, 'wallet/invalid-owner-sig');
         }
     }
 
@@ -189,14 +189,14 @@ pub mod owner_manager_component {
         ) -> SignerSignature {
             if raw_signature.len() != 2 {
                 let signature_array: Array<SignerSignature> = full_deserialize(raw_signature)
-                    .expect('argent/invalid-signature-format');
-                assert(signature_array.len() == 1, 'argent/invalid-signature-length');
+                    .expect('wallet/invalid-signature-format');
+                assert(signature_array.len() == 1, 'wallet/invalid-signature-length');
                 return *signature_array.at(0);
             }
-            let single_stark_owner = self.get_single_stark_owner_pubkey().expect('argent/no-single-stark-owner');
+            let single_stark_owner = self.get_single_stark_owner_pubkey().expect('wallet/no-single-stark-owner');
             SignerSignature::Starknet(
                 (
-                    StarknetSigner { pubkey: single_stark_owner.try_into().expect('argent/zero-pubkey') },
+                    StarknetSigner { pubkey: single_stark_owner.try_into().expect('wallet/zero-pubkey') },
                     StarknetSignature {
                         r: *raw_signature.pop_front().unwrap(), s: *raw_signature.pop_front().unwrap(),
                     },
@@ -218,7 +218,7 @@ pub mod owner_manager_component {
             };
 
             for owner_to_add in owners_to_add {
-                assert(!owner_guids_to_remove_span.contains(owner_to_add.into_guid()), 'argent/duplicated-guids');
+                assert(!owner_guids_to_remove_span.contains(owner_to_add.into_guid()), 'wallet/duplicated-guids');
                 let owner_guid = self.owners_storage.insert(owner_to_add);
                 self.emit_owner_added(owner_guid);
             };
@@ -227,8 +227,8 @@ pub mod owner_manager_component {
         }
 
         fn assert_valid_owner_count(self: @ComponentState<TContractState>, signers_len: usize) {
-            assert(signers_len != 0, 'argent/invalid-signers-len');
-            assert(signers_len <= MAX_SIGNERS_COUNT, 'argent/invalid-signers-len');
+            assert(signers_len != 0, 'wallet/invalid-signers-len');
+            assert(signers_len <= MAX_SIGNERS_COUNT, 'wallet/invalid-signers-len');
         }
 
         fn emit_signer_linked_event(ref self: ComponentState<TContractState>, event: SignerLinked) {

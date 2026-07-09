@@ -1,4 +1,6 @@
-use media_wallet::account::{SRC5_ACCOUNT_INTERFACE_ID, SRC5_ACCOUNT_INTERFACE_ID_OLD_1, SRC5_ACCOUNT_INTERFACE_ID_OLD_2};
+use media_wallet::account::{
+    SRC5_ACCOUNT_INTERFACE_ID, SRC5_ACCOUNT_INTERFACE_ID_OLD_1, SRC5_ACCOUNT_INTERFACE_ID_OLD_2,
+};
 use media_wallet::introspection::{ISRC5, ISRC5Legacy, SRC5_INTERFACE_ID, SRC5_INTERFACE_ID_OLD, src5_component};
 use media_wallet::mocks::src5_mocks::SRC5Mock;
 use media_wallet::outside_execution::outside_execution::{

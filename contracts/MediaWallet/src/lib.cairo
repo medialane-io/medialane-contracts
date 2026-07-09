@@ -18,7 +18,6 @@ pub mod outside_execution {
 
 pub mod multiowner_account {
     pub mod account_interface;
-    pub mod argent_account;
     pub mod events;
     pub mod guardian_manager;
     pub mod owner_alive;
@@ -26,6 +25,7 @@ pub mod multiowner_account {
     pub mod recovery;
     pub mod signer_storage_linked_set;
     mod upgrade_migration;
+    pub mod wallet_account;
 }
 
 pub mod linked_set {

@@ -8,7 +8,7 @@ pub fn execute_multicall(calls: Span<Call>) {
         match call_contract_syscall(*call.to, *call.selector, *call.calldata) {
             Result::Ok(_) => { index += 1; },
             Result::Err(revert_reason) => {
-                let mut data = array!['argent/multicall-failed', index];
+                let mut data = array!['wallet/multicall-failed', index];
                 data.append_all(revert_reason.span());
                 panic(data);
             },
@@ -26,7 +26,7 @@ pub fn execute_multicall_with_result(calls: Span<Call>) -> Array<Span<felt252>> 
                 index += 1;
             },
             Result::Err(revert_reason) => {
-                let mut data = array!['argent/multicall-failed', index];
+                let mut data = array!['wallet/multicall-failed', index];
                 data.append_all(revert_reason.span());
                 panic(data);
             },

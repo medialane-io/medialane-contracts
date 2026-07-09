@@ -30,15 +30,15 @@ struct LegacyEscape {
 
 #[starknet::component]
 pub mod upgrade_migration_component {
+    use core::num::traits::Zero;
     use media_wallet::multiowner_account::account_interface::IMediaWalletAccount;
-    use media_wallet::multiowner_account::argent_account::MediaWallet::Event as MediaWalletEvent;
-    use media_wallet::multiowner_account::argent_account::IEmitMediaWalletEvent;
     use media_wallet::multiowner_account::events::{EscapeCanceled, SignerLinked};
     use media_wallet::multiowner_account::owner_manager::{IOwnerManager, owner_manager_component};
+    use media_wallet::multiowner_account::wallet_account::IEmitMediaWalletEvent;
+    use media_wallet::multiowner_account::wallet_account::MediaWallet::Event as MediaWalletEvent;
     use media_wallet::signer::signer_signature::{
         Signer, SignerStorageValue, SignerTrait, SignerType, starknet_signer_from_pubkey,
     };
-    use core::num::traits::Zero;
     use starknet::storage::{
         StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess, StoragePointerWriteAccess,
     };
@@ -87,17 +87,17 @@ pub mod upgrade_migration_component {
     > of IRecoveryFromLegacyUpgrade<ComponentState<TContractState>> {
         fn recovery_from_legacy_upgrade(ref self: ComponentState<TContractState>) {
             // Ensuring there is a signer to recover
-            assert(self._signer.read() != 0, 'argent/no-signer-to-recover');
-            assert(self._implementation.read() != 0, 'argent/wrong-implementation');
+            assert(self._signer.read() != 0, 'wallet/no-signer-to-recover');
+            assert(self._implementation.read() != 0, 'wallet/wrong-implementation');
             let owner_manager = get_dep_component!(@self, OwnerManager);
-            assert(owner_manager.get_owners_guids().len() == 0, 'argent/owner-not-empty');
+            assert(owner_manager.get_owners_guids().len() == 0, 'wallet/owner-not-empty');
 
             self.migrate_from_before_0_4_0();
 
             // Ensuring the recovery was successful
-            assert(self._signer.read() == 0, 'argent/signer-not-removed');
-            assert(self._implementation.read() == 0, 'argent/impl-not-removed');
-            assert(owner_manager.get_owners_guids().len() == 1, 'argent/owner-not-migrated');
+            assert(self._signer.read() == 0, 'wallet/signer-not-removed');
+            assert(self._implementation.read() == 0, 'wallet/impl-not-removed');
+            assert(owner_manager.get_owners_guids().len() == 1, 'wallet/owner-not-migrated');
         }
     }
 
@@ -126,14 +126,14 @@ pub mod upgrade_migration_component {
 
             // Check basic invariants and emit missing events
             let owner_key = self._signer.read();
-            assert(owner_key != 0, 'argent/null-owner');
+            assert(owner_key != 0, 'wallet/null-owner');
 
             let owner = starknet_signer_from_pubkey(owner_key);
             self.emit_signer_linked(owner.into_guid(), owner);
 
             let guardian_key = self._guardian.read();
             let guardian_backup_key = self._guardian_backup.read();
-            assert(!(guardian_key == 0 && guardian_backup_key != 0), 'argent/backup-should-be-null');
+            assert(!(guardian_key == 0 && guardian_backup_key != 0), 'wallet/backup-should-be-null');
 
             if guardian_key != 0 {
                 let guardian = starknet_signer_from_pubkey(guardian_key);
@@ -147,7 +147,7 @@ pub mod upgrade_migration_component {
             let implementation = self._implementation.read();
 
             if implementation != Zero::zero() {
-                replace_class_syscall(implementation.try_into().unwrap()).expect('argent/invalid-after-upgrade');
+                replace_class_syscall(implementation.try_into().unwrap()).expect('wallet/invalid-after-upgrade');
                 self._implementation.write(Zero::zero());
             }
 
@@ -170,9 +170,7 @@ pub mod upgrade_migration_component {
                 contract.migrate_owner(starknet_signer_from_pubkey(starknet_owner_pubkey).storage_value());
                 self._signer.write(0);
             } else {
-                for signer_type in array![
-                    SignerType::Secp256k1, SignerType::Secp256r1,
-                ] {
+                for signer_type in array![SignerType::Secp256k1, SignerType::Secp256r1] {
                     let stored_value = self._signer_non_stark.read(signer_type.into());
                     if (stored_value != 0) {
                         let signer_storage_value = SignerStorageValue { signer_type, stored_value };
@@ -192,16 +190,14 @@ pub mod upgrade_migration_component {
             let guardian_backup_starknet_pubkey = self._guardian_backup.read();
             assert(
                 !(guardian_starknet_pubkey == 0 && guardian_backup_starknet_pubkey != 0),
-                'argent/backup-should-be-null',
+                'wallet/backup-should-be-null',
             );
             if guardian_backup_starknet_pubkey != 0 {
                 guardians_to_migrate
                     .append(starknet_signer_from_pubkey(guardian_backup_starknet_pubkey).storage_value());
                 self._guardian_backup.write(0);
             } else {
-                for signer_type in array![
-                    SignerType::Secp256k1, SignerType::Secp256r1,
-                ] {
+                for signer_type in array![SignerType::Secp256k1, SignerType::Secp256r1] {
                     let stored_value = self._guardian_backup_non_stark.read(signer_type.into());
                     if (stored_value != 0) {
                         guardians_to_migrate.append(SignerStorageValue { signer_type, stored_value });

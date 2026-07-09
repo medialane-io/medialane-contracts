@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
+use core::poseidon::poseidon_hash_span;
 use media_wallet::session::session::Session;
 use media_wallet::{
     offchain_message::{
@@ -6,7 +7,6 @@ use media_wallet::{
         get_message_hash_rev_1_with_precalc,
     },
 };
-use core::poseidon::poseidon_hash_span;
 use starknet::{account::Call, get_contract_address, get_tx_info};
 
 

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0
+use core::hash::{HashStateExTrait, HashStateTrait};
+use core::pedersen::PedersenTrait;
+use core::poseidon::poseidon_hash_span;
 use media_wallet::offchain_message::{
     IOffChainMessageHashRev0, IOffChainMessageHashRev1, IStructHashRev0, IStructHashRev1, StarkNetDomain,
     StarknetDomain, StructHashStarkNetDomain, get_message_hash_rev_1_with_precalc,
 };
 use media_wallet::outside_execution::outside_execution::OutsideExecution;
-use core::hash::{HashStateExTrait, HashStateTrait};
-use core::pedersen::PedersenTrait;
-use core::poseidon::poseidon_hash_span;
 use starknet::{account::Call, get_contract_address, get_tx_info};
 
 pub const MAINNET_FIRST_HADES_PERMUTATION: (felt252, felt252, felt252) = (

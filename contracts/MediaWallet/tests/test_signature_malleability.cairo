@@ -30,7 +30,7 @@ fn test_secp256k1_malleability(message_hash: felt252) {
 }
 
 #[test]
-#[should_panic(expected: ('argent/malleable-signature',))]
+#[should_panic(expected: ('wallet/malleable-signature',))]
 fn test_secp256r1_malleability_error() {
     let signature = Signature { r: 1, s: SECP_256_R1_HALF + 1, y_parity: true };
 
@@ -40,7 +40,7 @@ fn test_secp256r1_malleability_error() {
 }
 
 #[test]
-#[should_panic(expected: ('argent/malleable-signature',))]
+#[should_panic(expected: ('wallet/malleable-signature',))]
 fn test_secp256k1_malleability_error() {
     let signature = Signature { r: 1, s: SECP_256_K1_HALF + 1, y_parity: true };
 

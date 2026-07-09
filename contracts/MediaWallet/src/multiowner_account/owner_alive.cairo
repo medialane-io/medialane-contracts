@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0
-use media_wallet::offchain_message::{IOffChainMessageHashRev1, IStructHashRev1, StarknetDomain};
-use media_wallet::signer::signer_signature::SignerSignature;
 use core::hash::{HashStateExTrait, HashStateTrait};
 use core::poseidon::PoseidonTrait;
+use media_wallet::offchain_message::{IOffChainMessageHashRev1, IStructHashRev1, StarknetDomain};
+use media_wallet::signer::signer_signature::SignerSignature;
 use starknet::{get_contract_address, get_tx_info};
 
 /// @notice Message to sign proving a specific owner is still valid

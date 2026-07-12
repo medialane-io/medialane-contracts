@@ -229,8 +229,14 @@ mod test {
     }
 
     #[test]
+    fn test_contract_version() {
+        let env = setup();
+        assert!(env.medialane.contract_version() == '0.4.0', "version mismatch");
+    }
+
+    #[test]
     fn test_fulfill_caps_royalty_at_signed_bound() {
-        // NFT royalty 50%, but the seller signed a 10% cap → only 10% paid (F8).
+        // NFT royalty 50%, but the seller signed a 10% cap → only 10% paid.
         let env = setup();
         let hash = setup_royalty_listing(@env, 5000);
         let receiver: ContractAddress = ROYALTY_RECEIVER.try_into().unwrap();
@@ -666,5 +672,34 @@ mod test {
 
         call_as(medialane, env.fulfiller);
         env.medialane.fulfill_order(hash); // _pay -> malicious.transfer_from -> reenter
+    }
+
+    #[test]
+    #[should_panic(expected: 'Reentrant call')]
+    fn test_cancel_reentrancy_blocked() {
+        // A listing whose payment token reenters cancel_order during settlement.
+        // Without the guard on cancel_order this would emit OrderCancelled inside
+        // the fill, producing a cancel-then-fill event ordering. The guard aborts it.
+        let env = setup();
+        let medialane = env.medialane.contract_address;
+
+        let malicious = IMaliciousERC20Dispatcher {
+            contract_address: declare_and_deploy("MaliciousERC20", array![]),
+        };
+
+        call_as(env.erc721.contract_address, OWNER.try_into().unwrap());
+        env.erc721.mint_token(env.offerer, TOKEN_ID.into());
+        call_as(env.erc721.contract_address, env.offerer);
+        env.erc721.approve_token(medialane, TOKEN_ID.into());
+
+        let mut params = listing_params(@env);
+        params.consideration.token = malicious.contract_address;
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        malicious.set_cancel_attack(medialane, hash);
+
+        call_as(medialane, env.fulfiller);
+        env.medialane.fulfill_order(hash); // _pay -> transfer_from -> reenter cancel_order
     }
 }

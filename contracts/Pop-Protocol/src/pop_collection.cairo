@@ -28,6 +28,8 @@ pub mod POPCollection {
 
     /// Organizers can manage allowlists, mint, and update metadata.
     pub const ORGANIZER_ROLE: felt252 = selector!("ORGANIZER_ROLE");
+    /// On-chain release version of this immutable deployment.
+    pub const CONTRACT_VERSION: felt252 = '0.1.0';
     /// Safety cap — 100 addresses per batch is well within Starknet tx limits.
     pub const MAX_BATCH_SIZE: u32 = 100;
 
@@ -292,6 +294,10 @@ pub mod POPCollection {
 
         fn total_minted(self: @ContractState) -> u256 {
             self.last_token_id.read()
+        }
+
+        fn contract_version(self: @ContractState) -> felt252 {
+            CONTRACT_VERSION
         }
     }
 

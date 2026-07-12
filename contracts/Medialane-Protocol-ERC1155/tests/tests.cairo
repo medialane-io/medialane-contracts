@@ -205,6 +205,12 @@ mod test {
     }
 
     #[test]
+    fn test_contract_version() {
+        let env = setup();
+        assert!(env.medialane.contract_version() == '0.3.0', "version mismatch");
+    }
+
+    #[test]
     #[should_panic(expected: 'Offerer cannot be zero')]
     fn test_register_rejects_zero_offerer() {
         let env = setup();
@@ -592,6 +598,37 @@ mod test {
 
         call_as(medialane, env.fulfiller);
         env.medialane.fulfill_order(hash, UNITS); // _pay -> malicious.transfer_from -> reenter
+    }
+
+    #[test]
+    #[should_panic(expected: 'Reentrant call')]
+    fn test_cancel_reentrancy_blocked() {
+        // A listing whose payment token reenters cancel_order during settlement.
+        // On a partial fill the order is still Created, so without the guard this
+        // would emit OrderCancelled inside the fill (cancel-then-fill ordering).
+        // The guard aborts it.
+        let env = setup();
+        let owner: ContractAddress = OWNER.try_into().unwrap();
+        let medialane = env.medialane.contract_address;
+
+        let malicious = IMaliciousERC20Dispatcher {
+            contract_address: declare_and_deploy("MaliciousERC20", array![]),
+        };
+
+        call_as(env.erc1155.contract_address, owner);
+        env.erc1155.mint(env.offerer, TOKEN_ID.into(), UNITS.into(), array![].span());
+        call_as(env.erc1155.contract_address, env.offerer);
+        env.erc1155.approve(medialane, true);
+
+        let mut params = listing_params(@env);
+        params.consideration.token = malicious.contract_address;
+        let hash = env.medialane.get_order_hash(params, params.offerer);
+        env.medialane.register_order(signed_order(@env, params, env.offerer_sk));
+
+        malicious.set_cancel_attack(medialane, hash);
+
+        call_as(medialane, env.fulfiller);
+        env.medialane.fulfill_order(hash, UNITS); // _pay -> transfer_from -> reenter cancel_order
     }
 
     #[test]

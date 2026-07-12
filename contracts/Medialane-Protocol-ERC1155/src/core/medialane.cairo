@@ -38,6 +38,12 @@ pub mod Medialane1155 {
     /// Basis-points denominator: royalty bps are a fraction of 10_000 (100%).
     const BPS_DENOMINATOR: u256 = 10000;
 
+    /// On-chain protocol version for this immutable deployment. Distinct from the
+    /// SNIP-12 domain `version` below, which is a signature-domain separator; this
+    /// is the human-readable release identifier that clients read to know which
+    /// class is live.
+    const CONTRACT_VERSION: felt252 = '0.3.0';
+
     #[storage]
     struct Storage {
         orders: Map<felt252, OrderDetails>,
@@ -75,6 +81,8 @@ pub mod Medialane1155 {
     #[abi(embed_v0)]
     impl Medialane1155Impl of IMedialane1155<ContractState> {
         fn register_order(ref self: ContractState, order: Order) {
+            // Lifecycle mutations may not run inside a fill's settlement window.
+            assert(!self.entered.read(), errors::REENTRANT_CALL);
             let params = order.parameters;
             let offerer = params.offerer;
 
@@ -169,6 +177,8 @@ pub mod Medialane1155 {
         }
 
         fn cancel_order(ref self: ContractState, cancel_request: CancelRequest) {
+            // Lifecycle mutations may not run inside a fill's settlement window.
+            assert(!self.entered.read(), errors::REENTRANT_CALL);
             let cancellation = cancel_request.cancelation;
             let offerer = cancellation.offerer;
             let order_hash = cancellation.order_hash;
@@ -218,6 +228,10 @@ pub mod Medialane1155 {
 
         fn get_native_token_address(self: @ContractState) -> ContractAddress {
             self.native_token_address.read()
+        }
+
+        fn contract_version(self: @ContractState) -> felt252 {
+            CONTRACT_VERSION
         }
     }
 

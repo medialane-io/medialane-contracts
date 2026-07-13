@@ -9,7 +9,12 @@ registration (listings) or an SPL token delegate (bids). Zero protocol fees;
 no admin instructions.
 
 Same protocol semantics as the Starknet and EVM Medialane venues, expressed
-idiomatically for Solana.
+idiomatically for Solana, with one deliberate simplification: orders carry no
+separate recipient — a listing's payment goes to the offerer and a bid's asset
+goes to the offerer, and a fill delivers to the fulfiller. The
+route-to-a-chosen-recipient option of the other venues is dropped. Lifecycle
+mutations cannot run inside a fill's settlement window because the Solana
+runtime itself prohibits reentrant cross-program invocation.
 
 ## Build & test
 

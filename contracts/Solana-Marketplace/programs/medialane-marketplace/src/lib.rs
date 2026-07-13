@@ -246,6 +246,10 @@ pub mod medialane_marketplace {
         let mint_key = ctx.accounts.payment_mint.key();
         for (i, (creator, _)) in shares.iter().enumerate() {
             let info = &ctx.remaining_accounts[i];
+            require!(
+                info.owner == &anchor_spl::token::ID,
+                VenueError::CreatorAccountMismatch
+            );
             let token_account = TokenAccount::try_deserialize(&mut &info.data.borrow()[..])?;
             require!(
                 token_account.owner == *creator && token_account.mint == mint_key,

@@ -515,7 +515,7 @@ listings via msg.value (bids are ERC-20 only); zero fees; no owner/admin/upgrade
 
 - **Stack**: Solidity 0.8.28 + OpenZeppelin v5.4.0 + Foundry
 - **EIP-712 domain**: name "Medialane", version "1" (chainId + verifyingContract bind deployments)
-- **Status**: built and tested; NOT deployed (deploys are Phase 4, separately authorized)
+- **Status**: built, tested, and parity-reviewed against the Cairo original (2026-07-13, fixes merged); NOT deployed (deploys are Phase 4, separately authorized)
 
 Build & test:
 
@@ -534,7 +534,7 @@ listings via msg.value (bids ERC-20 only); zero fees; no owner/admin/upgrade/pau
 
 - **Stack**: Solidity 0.8.28 + OpenZeppelin v5.4.0 + Foundry
 - **EIP-712 domain**: name "Medialane", version "1" (verifyingContract separates it from the 721 venue)
-- **Status**: built and tested; NOT deployed (deploys are Phase 4, separately authorized)
+- **Status**: built, tested, and parity-reviewed against the Cairo original (2026-07-13, fixes merged); NOT deployed (deploys are Phase 4, separately authorized)
 
 Build & test:
 
@@ -556,7 +556,7 @@ settlement PDA. Zero fees; no admin instructions.
 
 - **Stack**: Rust 1.89 (pinned) + Anchor 1.1.2 + Agave 3.1.10 + mpl-core 0.12.1 + anchor-spl
 - **Tests**: Rust LiteSVM (0.13.1) against the real mainnet `mpl_core.so` fixture; 25 tests
-- **Status**: built and tested; NOT deployed (deploys separately authorized; revoke upgrade authority at deploy)
+- **Status**: built, tested, and parity-reviewed against the Cairo original (2026-07-13, fixes merged); NOT deployed (deploys separately authorized; revoke upgrade authority at deploy)
 
 Build & test:
 
@@ -577,7 +577,7 @@ chain. Zero fees; no admin functions.
 
 - **Stack**: soroban-sdk 26.1.0 + wasm32v1-none; tests in the native Env with a real SAC payment token
 - **Gotchas**: same as Soroban-MIP-Collections (ed25519-dalek 2.2.0 pin; spec-shaking env var for wasm builds)
-- **Status**: built and tested (24 tests); NOT deployed (deploys separately authorized)
+- **Status**: built, tested (25 tests), and parity-reviewed against the Cairo original (2026-07-13, fixes merged); NOT deployed (deploys separately authorized)
 
 Build & test:
 

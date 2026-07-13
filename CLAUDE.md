@@ -184,6 +184,146 @@ DROP_START_BLOCK=8341335
 
 ---
 
+### Creator-Coin (`contracts/Creator-Coin/`)
+
+Permissionless launchpad for **Creator Coins** — a **faithful fork of Keep Starknet
+Strange's audited launchpad framework** (MIT; `LICENSE` in the package). Protocol
+mechanics are preserved verbatim; only the naming is Medialane's (renamed end to end —
+**no `unruggable`/`memecoin` identifiers remain anywhere in the package**).
+
+A coin is created in two steps: (1) deploy a fixed-supply ERC-20 `CreatorCoin` via the
+`Factory` (permissionless); (2) launch it on Ekubo (owner-only, once) with
+transfer-restriction (anti-snipe) params and a quote token. At launch all liquidity goes
+into the Ekubo pool, the team allocation (≤10% of supply, ≤10 holders) is bought back out
+at the starting price and distributed, and the coin's ownership is renounced. **The
+principal LP position is held permanently by `EkuboLauncher`** — no code path withdraws
+it; only pool fees (quote side) are withdrawable by the position owner. Ekubo-only since
+v0.2.0: the Jediswap/StarkDeFi adapters and the `LockManager` locker are removed
+(Ekubo's NFT position in the launcher IS the lock).
+
+- **Status**: **v0.2.0, merged to `main` (PR #11, 2026-07-09)** — on-chain `version()`
+  ("0.2.0") on Factory/CreatorCoin/EkuboLauncher, Ekubo-only purge, dead-code cleanup.
+  25/25 unit tests green on the pinned toolchain; audited (`cairo-auditor`, no
+  Critical/High — `medialane-core/docs/audits/2026-06-03-creator-coin-audit.md`) plus a
+  full source review 2026-07-09 (PR #11). **The mainnet deployment below is the
+  2026-06-04 pre-v0.2.0 build (Ekubo-only)** — v0.2.0 on `main` is not yet
+  declared/deployed.
+  Ekubo fork tests were *not* runnable (snforge 0.16 can't fork current mainnet / Sierra
+  1.7.0) — the Ekubo launch path is validated by unrug's production history + audit + a
+  **team smoke launch (✅ passed 2026-06-04** — tx `0x253e00…233d77`, coin
+  `0x6d42e3…2500a0`; verified is_launched, team alloc distributed, LP locked in
+  EkuboLauncher as EkuboNFT 2287380).
+
+- **Integration requirements** (2026-07-09 audit; also in `@medialane/sdk` CLAUDE.md):
+  1. The quote transfer that funds the team buyback and `launch_on_ekubo` must be **one
+     atomic multicall** (SDK: `quoteFundAmount`) — the buyback sweeps the Factory's
+     entire quote balance, so quote pre-funded in a separate tx can be consumed by
+     someone else's launch.
+  2. **Team allocation must sum to ≥ 1 coin (1e18 raw)** — the launcher donates exactly
+     1 coin to the Ekubo token registry out of the team position, so less (including
+     zero holders) reverts with an unreadable u256 underflow. Validate app-side.
+  3. Coin-side pool fees are unrecoverable by design (`withdraw_fees` pays quote only).
+  4. The anti-snipe max-buy cap is per-transaction — friction, not a guarantee.
+
+  **Mainnet deployment (2026-06-04, deployer `medialane-deployer`
+  0x06acf…35, via Lava RPC + starknet.js):**
+
+  | Item | Address / hash |
+  |---|---|
+  | **Factory** (entrypoint) | `0x50fa807b5274079fb19374673d7bab6d2dc3af7e1032ea43eb6e44bcbde4c3c` |
+  | **EkuboLauncher** | `0x4f7fceb5ac10f12f9544a09580592e5bdf1b7f04f48765eecf12286d8ccb7b4` |
+  | CreatorCoin class hash | `0x743e4c8a5b96bb83bbf4af04edbbb482d5ece89eed9b729a79fb7df0cd0b6b6` |
+  | EkuboLauncher class hash | `0x701706df0fd3dcac12eb0f810e7142eae7bf2b25fb279259331195e0053e9be` |
+  | Factory class hash | `0x51765926b1344c9a20b8cd4b5abe7b7d47375ae97cf6804db3ea5d4b05a9b55` |
+
+  Deployed (pre-v0.2.0) Factory ctor: `(creator_coin_class_hash, lock_manager=0x0
+  [unused], exchanges=[(Ekubo, launcher)], migrated=[])` → **only Ekubo registered**.
+  The v0.2.0 Factory ctor is `(creator_coin_class_hash, exchanges)`. EkuboLauncher ctor:
+  `(core, registry, positions, router)` with unrug-matched Ekubo addrs (Core
+  `0x00…0325b4b`, Registry `0x0013e258…`, Positions `0x02e0af…`, Router `0x01b6f5…`).
+  Verified on-chain: classes deployed, Ekubo wired, Jediswap disabled. **The deployer is
+  also `CreatorCoin.owner`-eligible only via `create_creator_coin` (permissionless).**
+- **Contracts**: `Factory` (`src/factory/factory.cairo`, the entrypoint), `CreatorCoin`
+  (`src/token/creator_coin.cairo`, ERC-20 + framework fns `is_launched` /
+  `get_team_allocation` / `liquidity_type`), `EkuboLauncher`
+  (`src/exchanges/ekubo/launcher.cairo`, holds the locked LP positions).
+- **Provenance / design note**: forked from `keep-starknet-strange/unruggable.meme`
+  `packages/contracts`. ⚠️ The earlier
+  `medialane-core/docs/specs/2026-06-02-creator-coin-CORRECTED-model.md` (non-custodial,
+  no-lock, no-buyback, LP-to-creator) was **scrapped** — it misread the upstream and
+  broke the anti-rug guarantee. The shipped design is the faithful fork above (permanent
+  Ekubo LP lock + team buyback). Treat that doc as historical until rewritten.
+
+> **Toolchain note:** this package keeps **unrug's own toolchain** — `starknet 2.4.3` /
+> `openzeppelin 0.8.0` / `snforge_std 0.16.0` (pinned in the package `Scarb.toml`).
+> Each `contracts/*` package is self-contained with its own toolchain (there is no root
+> workspace), so this does not need to match the 2.18 packages. The leftover
+> `.tool-versions` (scarb 2.18) is stale and does not reflect what the package compiles
+> against. Building/testing requires installing scarb ~2.4.3 + starknet-foundry ~0.16.
+
+**Build + test:**
+```bash
+cd contracts/Creator-Coin
+scarb build
+snforge test               # fork tests need an RPC url in [[tool.snforge.fork]]
+snforge test unit_tests    # unit tests need no RPC
+```
+
+**Backend indexing / env vars (post-deploy):** to be mapped against the fork's actual
+factory launch events once the package is finalized and deployed (`CREATOR_COIN_FACTORY_ADDRESS`,
+`CREATOR_COIN_START_BLOCK`).
+
+---
+
+### MediaWallet (`contracts/MediaWallet/`)
+
+Self-sovereign Starknet account contract (GPL-3.0, open source). **Faithful fork of
+`argentlabs/argent-contracts-starknet` at the ChainSecurity-audited v0.5.0 commit** —
+the exact baseline commit is pinned in `FORK.md` and the five baseline audit PDFs are
+vendored in `audit/`. The complete delta from the audited baseline lives in `AUDIT.md`
+(that delta is the scope of any future audit engagement).
+
+**Delta from baseline:** WebAuthn/P256, EIP-191, and the multisig module removed
+(trailing `SignerSignature` enum variants — remaining wire indices Starknet=0,
+Secp256k1=1, Secp256r1=2 are byte-identical to the audited baseline); renamed end to
+end (**no `argent` identifiers remain in any `.cairo` file** — error short-strings use
+the `'wallet/…'` prefix, same length as the original so all stay ≤ 31 chars); one piece
+of new code: `MediaWalletFactory` (`src/factory.cairo`, ~100 lines).
+
+**Key properties:**
+- Single Stark-curve owner; optional user-designated guardian recovery; session keys;
+  SNIP-9 V2 outside execution (gasless/paymaster). SNIP-12 domains are deliberately
+  unchanged from upstream (`'SessionAccount.session'`, `'Account.execute_from_outside'`)
+  so standard session/paymaster tooling works.
+- The concise 2-felt/4-felt Stark signature path is intact — plain starknet.js accounts
+  work unmodified.
+- Owner-controlled `replace_class` upgrades; `get_name()` returns `'MediaWallet'` and
+  the upgrade path asserts name equality, so Argent↔MediaWallet cross-grades are
+  structurally blocked.
+- `MediaWalletFactory`: permissionless, immutable (class hash fixed at construction, no
+  admin/fee/upgrade), `deploy_from_zero: true` — the wallet address depends only on
+  class hash + salt + owner pubkey, never on the factory (counterfactual
+  `compute_address` before deploy).
+
+- **Status**: on `main` (added 2026-06-30; rename completed 2026-07-09), audited-fork
+  review passed 2026-07-09, **not yet declared/deployed**.
+
+> **Toolchain:** scarb 2.10.1 + starknet-foundry 0.38.3, pinned in the package
+> `.tool-versions` (both installed via asdf on this machine).
+
+**Build + test:**
+```bash
+cd contracts/MediaWallet
+scarb build
+snforge test    # 120 tests, no RPC needed
+```
+
+**Deploy:** declare `MediaWallet` → deploy `MediaWalletFactory(wallet_class_hash)` →
+wallets via `factory.deploy_wallet(owner_pubkey, salt)`; predict addresses with
+`factory.compute_address(owner_pubkey, salt)`.
+
+---
+
 ### Medialane-Protocol-ERC721 (`contracts/Medialane-Protocol-ERC721/`)
 
 > **REDESIGN DEPLOYED.** The redesign described below (branch `feat/marketplace-721-redesign`)

@@ -420,3 +420,10 @@ fn test_set_phase_allowlist_blocks_non_members() {
     drop.claim(1);
     stop_cheat_caller_address(drop.contract_address);
 }
+
+#[test]
+fn test_collection_contract_version() {
+    let factory = deploy_factory();
+    let drop = create_free_drop(factory, ADMIN());
+    assert(drop.contract_version() == '0.1.0', 'version mismatch');
+}

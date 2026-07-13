@@ -47,4 +47,6 @@ pub trait IDropCollection<TContractState> {
     fn remaining_supply(self: @TContractState) -> u256;
     fn minted_by_wallet(self: @TContractState, wallet: ContractAddress) -> u256;
     fn is_paused(self: @TContractState) -> bool;
+    /// The on-chain release version of this immutable deployment.
+    fn contract_version(self: @TContractState) -> felt252;
 }

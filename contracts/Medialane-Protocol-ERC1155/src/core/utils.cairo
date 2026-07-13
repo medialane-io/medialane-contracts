@@ -1,8 +1,6 @@
-// SNIP-12 type hashes for the redesigned ERC1155 venue. Field names/order MUST
-// match types.cairo and the off-chain SDK typed-data. Identical shape to the 721
-// venue (same order schema), differing only by the ERC1155 item semantics.
-// NOTE: the EIP-2981 interface id is imported from openzeppelin (never hardcoded
-// — the prior hardcoded value did not match the OZ id and broke royalty detection).
+// SNIP-12 type hashes, computed via selector!() over the canonical type strings
+// (never hardcoded hex). Field names/order MUST match the structs in types.cairo
+// and the off-chain SDK typed-data, or signatures will not validate.
 
 pub const OFFER_ITEM_TYPE_HASH: felt252 = selector!(
     "\"OfferItem\"(\"item_type\":\"shortstring\",\"token\":\"ContractAddress\",\"identifier_or_criteria\":\"felt\",\"amount\":\"felt\")",

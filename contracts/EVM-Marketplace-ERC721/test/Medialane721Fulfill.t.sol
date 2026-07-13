@@ -2,7 +2,9 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Medialane721} from "../src/Medialane721.sol";
+import {BrokenRoyaltyERC721} from "./mocks/BrokenRoyaltyERC721.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockERC721} from "./mocks/MockERC721.sol";
 import {ReentrantERC721} from "./mocks/ReentrantERC721.sol";
@@ -216,6 +218,84 @@ contract Medialane721FulfillTest is Test {
         vm.prank(buyer);
         vm.expectRevert(); // re-entered call hits the guard; outer transfer reverts
         venue.fulfillOrder(orderHash);
+    }
+
+    function _armedEvilOrder(ReentrantERC721.Action action) internal returns (ReentrantERC721, bytes32) {
+        ReentrantERC721 evil = new ReentrantERC721();
+        uint256 evilSellerPk = 0xEE;
+        address evilSeller = vm.addr(evilSellerPk);
+        evil.mint(evilSeller, 1);
+        vm.prank(evilSeller);
+        evil.setApprovalForAll(address(venue), true);
+        Medialane721.OrderParameters memory params = Medialane721.OrderParameters({
+            offerer: evilSeller,
+            offer: Medialane721.OfferItem(Medialane721.ItemType.ERC721, address(evil), 1, 1),
+            consideration: Medialane721.ConsiderationItem(Medialane721.ItemType.ERC20, address(erc20), 0, 1e18, evilSeller),
+            royaltyMaxBps: 0,
+            startTime: block.timestamp,
+            endTime: 0,
+            salt: 1,
+            counter: 0
+        });
+        bytes32 orderHash = venue.getOrderHash(params);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(evilSellerPk, orderHash);
+        venue.registerOrder(params, abi.encodePacked(r, s, v));
+        evil.armAction(venue, orderHash, action);
+        return (evil, orderHash);
+    }
+
+    function test_fulfill_registerDuringSettlementBlocked() public {
+        (, bytes32 orderHash) = _armedEvilOrder(ReentrantERC721.Action.Register);
+        vm.prank(buyer);
+        vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
+        venue.fulfillOrder(orderHash);
+    }
+
+    function test_fulfill_cancelDuringSettlementBlocked() public {
+        (, bytes32 orderHash) = _armedEvilOrder(ReentrantERC721.Action.Cancel);
+        vm.prank(buyer);
+        vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
+        venue.fulfillOrder(orderHash);
+    }
+
+    function _brokenRoyaltyFill(BrokenRoyaltyERC721.Mode mode) internal {
+        BrokenRoyaltyERC721 broken = new BrokenRoyaltyERC721();
+        broken.setMode(mode);
+        uint256 brokenSellerPk = 0xB0B;
+        address brokenSeller = vm.addr(brokenSellerPk);
+        broken.mint(brokenSeller, 1);
+        vm.prank(brokenSeller);
+        broken.setApprovalForAll(address(venue), true);
+        Medialane721.OrderParameters memory params = Medialane721.OrderParameters({
+            offerer: brokenSeller,
+            offer: Medialane721.OfferItem(Medialane721.ItemType.ERC721, address(broken), 1, 1),
+            consideration: Medialane721.ConsiderationItem(Medialane721.ItemType.ERC20, address(erc20), 0, 10e18, brokenSeller),
+            royaltyMaxBps: 1000,
+            startTime: block.timestamp,
+            endTime: 0,
+            salt: 2,
+            counter: 0
+        });
+        bytes32 orderHash = venue.getOrderHash(params);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(brokenSellerPk, orderHash);
+        venue.registerOrder(params, abi.encodePacked(r, s, v));
+        vm.prank(buyer);
+        venue.fulfillOrder(orderHash);
+        // Broken royalty never blocks a fill; the seller keeps the full amount.
+        assertEq(broken.ownerOf(1), buyer);
+        assertEq(erc20.balanceOf(brokenSeller), 10e18);
+    }
+
+    function test_fulfill_brokenRoyaltyReverting() public {
+        _brokenRoyaltyFill(BrokenRoyaltyERC721.Mode.Revert);
+    }
+
+    function test_fulfill_brokenRoyaltyShortReturn() public {
+        _brokenRoyaltyFill(BrokenRoyaltyERC721.Mode.ShortReturn);
+    }
+
+    function test_fulfill_brokenRoyaltyBadReceiver() public {
+        _brokenRoyaltyFill(BrokenRoyaltyERC721.Mode.BadReceiver);
     }
 
     function test_fulfill_freeOrder() public {

@@ -32,4 +32,6 @@ pub trait IDropFactory<TContractState> {
     // ── Admin ────────────────────────────────────────────────────────────────
     fn get_drop_collection_class_hash(self: @TContractState) -> ClassHash;
     fn set_drop_collection_class_hash(ref self: TContractState, new_class_hash: ClassHash);
+    /// The on-chain release version of this deployment.
+    fn contract_version(self: @TContractState) -> felt252;
 }

@@ -40,8 +40,7 @@ impl Felt252TryIntoItemType of TryInto<felt252, ItemType> {
 }
 
 /// A single fixed-price item. `amount` is the quantity (1 for ERC721, the wei
-/// amount for NATIVE/ERC20). There is no separate end_amount — fixed price only
-/// (Dutch interpolation lives in a future auction venue).
+/// amount for NATIVE/ERC20). There is no separate end_amount — fixed price only.
 ///
 /// `identifier_or_criteria` carries the ERC721 `token_id`. Because the order is
 /// SNIP-12 signed, it is a `felt252`: token IDs must fit in a felt (< 2^252).

@@ -4,6 +4,7 @@ use snforge_std::{
 };
 use openzeppelin_token::erc721::interface::{IERC721MetadataDispatcher, IERC721MetadataDispatcherTrait};
 use pop_protocol::interfaces::IPOPCollection::IPOPCollectionDispatcherTrait;
+use pop_protocol::interfaces::IPOPFactory::IPOPFactoryDispatcherTrait;
 use super::utils::{
     deploy_factory, create_test_collection, ADMIN, ORGANIZER, STUDENT1, STUDENT2, STUDENT3,
 };
@@ -339,4 +340,11 @@ fn test_per_token_uri_not_affected_by_base_uri_update() {
     assert(meta.token_uri(1) == "ipfs://QmUpdated/1", 'Token 1 URI wrong');
     // token 2 keeps its custom URI, unaffected by base URI change
     assert(meta.token_uri(2) == "ipfs://QmDistinction/", 'Token 2 URI wrong');
+}
+
+#[test]
+fn test_collection_contract_version() {
+    let factory = deploy_factory();
+    let collection = create_test_collection(factory, ADMIN());
+    assert(collection.contract_version() == '0.1.0', 'version mismatch');
 }

@@ -541,3 +541,25 @@ Build & test:
     cd contracts/EVM-Marketplace-ERC1155
     forge build
     forge test
+
+### Solana-Marketplace (`contracts/Solana-Marketplace/`) — Solana (Rust/Anchor)
+
+Immutable marketplace venue for Metaplex Core assets — the Solana port of the
+Medialane venue protocol. Orders are offerer-signed instructions in PDAs
+(seeds ["order", offerer, salt]); register → fulfill (anyone, caller pays;
+counter re-checked at fill) → cancel/increment_counter/close_order. Royalties
+read live from the Core Royalties plugin (asset, then collection), capped at
+the offerer-signed max, split pro-rata across creators (remaining accounts).
+Listings settle via a Core TransferDelegate approved at registration (re-approved
+if the plugin already exists); bids are SPL-only via SPL delegation to the
+settlement PDA. Zero fees; no admin instructions.
+
+- **Stack**: Rust 1.89 (pinned) + Anchor 1.1.2 + Agave 3.1.10 + mpl-core 0.12.1 + anchor-spl
+- **Tests**: Rust LiteSVM (0.13.1) against the real mainnet `mpl_core.so` fixture; 25 tests
+- **Status**: built and tested; NOT deployed (deploys separately authorized; revoke upgrade authority at deploy)
+
+Build & test:
+
+    cd contracts/Solana-Marketplace
+    anchor build
+    cargo test

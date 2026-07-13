@@ -3,6 +3,7 @@ use collection_drop::interfaces::IDropFactory::IDropFactoryDispatcherTrait;
 use collection_drop::types::ClaimConditions;
 use starknet::contract_address_const;
 use super::utils::{deploy_factory, free_conditions, ADMIN, ORGANIZER, MINTER1};
+use starknet::ClassHash;
 
 // ── Organizer management ──────────────────────────────────────────────────────
 
@@ -122,4 +123,20 @@ fn test_paid_drop_requires_payment_token() {
     start_cheat_caller_address(factory.contract_address, ADMIN());
     factory.create_drop("Bad Drop", "BAD", "ipfs://Bad/", 100_u256, bad_conditions);
     stop_cheat_caller_address(factory.contract_address);
+}
+
+#[test]
+#[should_panic(expected: ('Invalid class hash',))]
+fn test_set_zero_class_hash_reverts() {
+    let factory = deploy_factory();
+    let zero: ClassHash = 0.try_into().unwrap();
+    start_cheat_caller_address(factory.contract_address, ADMIN());
+    factory.set_drop_collection_class_hash(zero);
+    stop_cheat_caller_address(factory.contract_address);
+}
+
+#[test]
+fn test_factory_contract_version() {
+    let factory = deploy_factory();
+    assert(factory.contract_version() == '0.1.0', 'version mismatch');
 }

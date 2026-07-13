@@ -61,4 +61,7 @@ pub trait IPOPFactory<TContractState> {
     /// Updates the POPCollection class hash (for upgrades to new collection logic).
     /// Only DEFAULT_ADMIN_ROLE.
     fn set_pop_collection_class_hash(ref self: TContractState, new_class_hash: ClassHash);
+
+    /// The on-chain release version of this deployment.
+    fn contract_version(self: @TContractState) -> felt252;
 }

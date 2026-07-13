@@ -57,4 +57,7 @@ pub trait IPOPCollection<TContractState> {
 
     /// Returns the total number of POPs minted from this collection.
     fn total_minted(self: @TContractState) -> u256;
+
+    /// The on-chain release version of this immutable deployment.
+    fn contract_version(self: @TContractState) -> felt252;
 }

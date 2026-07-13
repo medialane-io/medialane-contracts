@@ -149,8 +149,9 @@ contract Medialane1155 is EIP712, ReentrancyGuard {
     /// Register a maker's signed order. Validates everything statically
     /// determinable from the order itself, fail-fast; mutable state
     /// (ownership, approval, balance) is enforced at fill. The ERC1155 leg's
-    /// quantity seeds `remainingAmount` for partial fills.
-    function registerOrder(OrderParameters calldata parameters, bytes calldata signature) external {
+    /// quantity seeds `remainingAmount` for partial fills. Guarded: lifecycle
+    /// mutations may not run inside a fill's settlement window.
+    function registerOrder(OrderParameters calldata parameters, bytes calldata signature) external nonReentrant {
         address offerer = parameters.offerer;
         if (offerer == address(0)) revert InvalidOfferer();
         if (parameters.counter != _cancelCounter[offerer]) revert InvalidCounter();
@@ -258,7 +259,9 @@ contract Medialane1155 is EIP712, ReentrancyGuard {
 
     /// Cancel a single open order (any unfilled remainder dies with it). Only
     /// the order's offerer may cancel; the sender IS the authorization.
-    function cancelOrder(bytes32 orderHash) external {
+    /// Guarded: lifecycle mutations may not run inside a fill's settlement
+    /// window.
+    function cancelOrder(bytes32 orderHash) external nonReentrant {
         OrderDetails memory details = _orders[orderHash];
         if (details.status == OrderStatus.None) revert OrderNotFound();
         if (details.status == OrderStatus.Filled) revert OrderAlreadyFilled();
@@ -352,8 +355,11 @@ contract Medialane1155 is EIP712, ReentrancyGuard {
     }
 
     /// ERC-2981 royalty for the token on `saleAmount`, capped at the
-    /// seller-signed `royaltyMaxBps`. A non-2981 token, a failing call, a zero
-    /// receiver, or a zero amount yields no royalty.
+    /// seller-signed `royaltyMaxBps`. A non-2981 token, a failing call,
+    /// malformed return data, a zero receiver, or a zero amount yields no
+    /// royalty — a broken royalty implementation never blocks a fill. Raw
+    /// staticcalls because try/catch does not survive return-data decoding
+    /// failures.
     function _getRoyalty(address nft, uint256 tokenId, uint256 saleAmount, uint256 royaltyMaxBps)
         private
         view
@@ -361,21 +367,32 @@ contract Medialane1155 is EIP712, ReentrancyGuard {
     {
         if (saleAmount == 0) return (address(0), 0);
 
-        try IERC165(nft).supportsInterface(type(IERC2981).interfaceId) returns (bool supported) {
-            if (!supported) return (address(0), 0);
-        } catch {
-            return (address(0), 0);
+        (bool ok, bytes memory ret) =
+            nft.staticcall(abi.encodeCall(IERC165.supportsInterface, (type(IERC2981).interfaceId)));
+        if (!ok || ret.length < 32) return (address(0), 0);
+        bytes32 supportedWord;
+        assembly ("memory-safe") {
+            supportedWord := mload(add(ret, 0x20))
         }
+        if (supportedWord == bytes32(0)) return (address(0), 0);
 
-        try IERC2981(nft).royaltyInfo(tokenId, saleAmount) returns (address receiver, uint256 rawAmount) {
-            if (receiver == address(0) || rawAmount == 0) return (address(0), 0);
-            uint256 maxAmount = saleAmount * royaltyMaxBps / BPS_DENOMINATOR;
-            uint256 capped = rawAmount > maxAmount ? maxAmount : rawAmount;
-            if (capped == 0) return (address(0), 0);
-            return (receiver, capped);
-        } catch {
-            return (address(0), 0);
+        (ok, ret) = nft.staticcall(abi.encodeCall(IERC2981.royaltyInfo, (tokenId, saleAmount)));
+        if (!ok || ret.length < 64) return (address(0), 0);
+        bytes32 receiverWord;
+        bytes32 amountWord;
+        assembly ("memory-safe") {
+            receiverWord := mload(add(ret, 0x20))
+            amountWord := mload(add(ret, 0x40))
         }
+        if (uint256(receiverWord) > type(uint160).max) return (address(0), 0);
+        address receiver = address(uint160(uint256(receiverWord)));
+        uint256 rawAmount = uint256(amountWord);
+
+        if (receiver == address(0) || rawAmount == 0) return (address(0), 0);
+        uint256 maxAmount = saleAmount * royaltyMaxBps / BPS_DENOMINATOR;
+        uint256 capped = rawAmount > maxAmount ? maxAmount : rawAmount;
+        if (capped == 0) return (address(0), 0);
+        return (receiver, capped);
     }
 
     function getOrderDetails(bytes32 orderHash) external view returns (OrderDetails memory) {

@@ -10,7 +10,13 @@ including native XLM (the native Stellar Asset Contract). Zero protocol fees;
 no admin functions.
 
 Same protocol semantics as the Starknet, EVM, and Solana Medialane venues,
-expressed idiomatically for Soroban.
+expressed idiomatically for Soroban, with one deliberate simplification
+(shared with the Solana venue): orders carry no separate recipient — a
+listing's payment goes to the offerer, a bid's NFT goes to the offerer, and a
+fill delivers to the fulfiller. The route-to-a-chosen-recipient option of the
+Starknet and EVM venues is dropped. Lifecycle mutations cannot run inside a
+fill's settlement window because the Soroban host prohibits reentrant
+cross-contract calls.
 
 ## Build & test
 

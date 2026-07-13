@@ -205,6 +205,16 @@ fn register_rejects_negative_amount() {
     register_listing(&s, 1, -5, 0, 1_000_000, 0, 0);
 }
 
+#[test]
+#[should_panic]
+fn register_rejects_collection_as_payment_token() {
+    let s = setup(0);
+    s.venue.register_order(
+        &s.seller, &1u64, &Side::Listing, &s.nft, &7u32, &s.nft, &1i128, &0u32,
+        &1_000_000u64, &0u64, &0u64,
+    );
+}
+
 // ---------- fulfillment ----------
 
 fn approve_nft_to_venue(s: &Setup) {

@@ -86,6 +86,7 @@ pub enum VenueError {
     SelfFill = 10,
     OrderNotYetValid = 11,
     RoyaltyExceedsSale = 12,
+    PaymentTokenIsCollection = 13,
 }
 
 const EVT_CREATED: Symbol = symbol_short!("created");
@@ -119,6 +120,11 @@ impl MedialaneMarketplace {
         }
         if amount < 0 {
             panic_with_error!(&e, VenueError::InvalidAmount);
+        }
+        // The collection must not double as the payment token, or the two
+        // transfer surfaces collide at fill.
+        if payment_token == collection {
+            panic_with_error!(&e, VenueError::PaymentTokenIsCollection);
         }
         if counter != Self::get_counter(e.clone(), offerer.clone()) {
             panic_with_error!(&e, VenueError::InvalidCounter);

@@ -2,9 +2,12 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Medialane1155} from "../src/Medialane1155.sol";
+import {BrokenRoyaltyERC1155} from "./mocks/BrokenRoyaltyERC1155.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockERC1155} from "./mocks/MockERC1155.sol";
+import {ReentrantERC1155} from "./mocks/ReentrantERC1155.sol";
 
 contract Medialane1155FulfillTest is Test {
     Medialane1155 internal venue;
@@ -227,5 +230,90 @@ contract Medialane1155FulfillTest is Test {
         uint256 total = erc20.balanceOf(royaltyReceiver) + erc20.balanceOf(seller);
         assertEq(total, price * 50);
         assertLe(erc20.balanceOf(royaltyReceiver), price * 50 * 1000 / 10_000);
+    }
+
+    function _armedEvilOrder(ReentrantERC1155.Action action) internal returns (ReentrantERC1155, bytes32) {
+        ReentrantERC1155 evil = new ReentrantERC1155();
+        uint256 evilSellerPk = 0xEE;
+        address evilSeller = vm.addr(evilSellerPk);
+        evil.mint(evilSeller, 1, 10);
+        vm.prank(evilSeller);
+        evil.setApprovalForAll(address(venue), true);
+        Medialane1155.OrderParameters memory params = Medialane1155.OrderParameters({
+            offerer: evilSeller,
+            offer: Medialane1155.OfferItem(Medialane1155.ItemType.ERC1155, address(evil), 1, 10),
+            consideration: Medialane1155.ConsiderationItem(Medialane1155.ItemType.ERC20, address(erc20), 0, 1e18, evilSeller),
+            royaltyMaxBps: 0,
+            startTime: block.timestamp,
+            endTime: 0,
+            salt: 1,
+            counter: 0
+        });
+        bytes32 orderHash = venue.getOrderHash(params);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(evilSellerPk, orderHash);
+        venue.registerOrder(params, abi.encodePacked(r, s, v));
+        evil.armAction(venue, orderHash, action);
+        return (evil, orderHash);
+    }
+
+    function test_fulfill_fulfillDuringSettlementBlocked() public {
+        (, bytes32 orderHash) = _armedEvilOrder(ReentrantERC1155.Action.Fulfill);
+        vm.prank(buyer);
+        vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
+        venue.fulfillOrder(orderHash, 5);
+    }
+
+    function test_fulfill_registerDuringSettlementBlocked() public {
+        (, bytes32 orderHash) = _armedEvilOrder(ReentrantERC1155.Action.Register);
+        vm.prank(buyer);
+        vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
+        venue.fulfillOrder(orderHash, 5);
+    }
+
+    function test_fulfill_cancelDuringSettlementBlocked() public {
+        (, bytes32 orderHash) = _armedEvilOrder(ReentrantERC1155.Action.Cancel);
+        vm.prank(buyer);
+        vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
+        venue.fulfillOrder(orderHash, 5);
+    }
+
+    function _brokenRoyaltyFill(BrokenRoyaltyERC1155.Mode mode) internal {
+        BrokenRoyaltyERC1155 broken = new BrokenRoyaltyERC1155();
+        broken.setMode(mode);
+        uint256 brokenSellerPk = 0xB0B;
+        address brokenSeller = vm.addr(brokenSellerPk);
+        broken.mint(brokenSeller, 1, 10);
+        vm.prank(brokenSeller);
+        broken.setApprovalForAll(address(venue), true);
+        Medialane1155.OrderParameters memory params = Medialane1155.OrderParameters({
+            offerer: brokenSeller,
+            offer: Medialane1155.OfferItem(Medialane1155.ItemType.ERC1155, address(broken), 1, 10),
+            consideration: Medialane1155.ConsiderationItem(Medialane1155.ItemType.ERC20, address(erc20), 0, 1e18, brokenSeller),
+            royaltyMaxBps: 1000,
+            startTime: block.timestamp,
+            endTime: 0,
+            salt: 2,
+            counter: 0
+        });
+        bytes32 orderHash = venue.getOrderHash(params);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(brokenSellerPk, orderHash);
+        venue.registerOrder(params, abi.encodePacked(r, s, v));
+        vm.prank(buyer);
+        venue.fulfillOrder(orderHash, 10);
+        // Broken royalty never blocks a fill; the seller keeps the full amount.
+        assertEq(broken.balanceOf(buyer, 1), 10);
+        assertEq(erc20.balanceOf(brokenSeller), 10e18);
+    }
+
+    function test_fulfill_brokenRoyaltyReverting() public {
+        _brokenRoyaltyFill(BrokenRoyaltyERC1155.Mode.Revert);
+    }
+
+    function test_fulfill_brokenRoyaltyShortReturn() public {
+        _brokenRoyaltyFill(BrokenRoyaltyERC1155.Mode.ShortReturn);
+    }
+
+    function test_fulfill_brokenRoyaltyBadReceiver() public {
+        _brokenRoyaltyFill(BrokenRoyaltyERC1155.Mode.BadReceiver);
     }
 }

@@ -563,3 +563,24 @@ Build & test:
     cd contracts/Solana-Marketplace
     anchor build
     cargo test
+
+### Soroban-Marketplace (`contracts/Soroban-Marketplace/`) — Stellar (Soroban)
+
+Immutable marketplace venue for NFT collections on Stellar — the Soroban port
+of the Medialane venue protocol. Orders in contract storage keyed
+(offerer, salt); register (offerer-authorized) → fulfill (anyone; counter
+re-checked at fill) → cancel/increment_counter. Royalties via the collection's
+royalty_info interface (try-call; absent ⇒ none), capped at the signed max.
+Settlement via standard approvals; BOTH directions work in any SEP-41 token
+including native XLM (the native SAC) — no native-bid restriction on this
+chain. Zero fees; no admin functions.
+
+- **Stack**: soroban-sdk 26.1.0 + wasm32v1-none; tests in the native Env with a real SAC payment token
+- **Gotchas**: same as Soroban-MIP-Collections (ed25519-dalek 2.2.0 pin; spec-shaking env var for wasm builds)
+- **Status**: built and tested (24 tests); NOT deployed (deploys separately authorized)
+
+Build & test:
+
+    cd contracts/Soroban-Marketplace
+    SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=true cargo test
+    SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=true cargo build --target wasm32v1-none --release

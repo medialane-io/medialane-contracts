@@ -303,7 +303,9 @@ of new code: `MediaWalletFactory` (`src/factory.cairo`, ~100 lines).
 - `MediaWalletFactory`: permissionless, immutable (class hash fixed at construction, no
   admin/fee/upgrade), `deploy_from_zero: true` — the wallet address depends only on
   class hash + salt + owner pubkey, never on the factory (counterfactual
-  `compute_address` before deploy).
+  `compute_address` before deploy). `deploy_wallet` emits
+  `WalletDeployed { #[key] address, owner_pubkey, salt }` (indexed by the backend for
+  wallet tracking).
 
 - **Status**: on `main` (added 2026-06-30; rename completed 2026-07-09), audited-fork
   review passed 2026-07-09, **not yet declared/deployed**.

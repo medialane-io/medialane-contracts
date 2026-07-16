@@ -32,6 +32,20 @@ pub mod MediaWalletFactory {
         wallet_class_hash: ClassHash,
     }
 
+    #[event]
+    #[derive(Drop, starknet::Event)]
+    pub enum Event {
+        WalletDeployed: WalletDeployed,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct WalletDeployed {
+        #[key]
+        pub address: ContractAddress,
+        pub owner_pubkey: felt252,
+        pub salt: felt252,
+    }
+
     #[constructor]
     fn constructor(ref self: ContractState, wallet_class_hash: ClassHash) {
         self.wallet_class_hash.write(wallet_class_hash);
@@ -43,6 +57,7 @@ pub mod MediaWalletFactory {
             let class_hash = self.wallet_class_hash.read();
             let calldata = build_constructor_calldata(owner_pubkey);
             let (address, _) = deploy_syscall(class_hash, salt, calldata, true).unwrap_syscall();
+            self.emit(WalletDeployed { address, owner_pubkey, salt });
             address
         }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0
-use media_wallet::factory::{IMediaWalletFactoryDispatcher, IMediaWalletFactoryDispatcherTrait};
-use snforge_std::{ContractClassTrait, DeclareResultTrait, declare};
+use media_wallet::factory::{IMediaWalletFactoryDispatcher, IMediaWalletFactoryDispatcherTrait, MediaWalletFactory};
+use snforge_std::{ContractClassTrait, DeclareResultTrait, EventSpyAssertionsTrait, declare, spy_events};
 
 fn deploy_factory(wallet_class_hash: felt252) -> IMediaWalletFactoryDispatcher {
     let contract = declare("MediaWalletFactory").unwrap().contract_class();
@@ -61,4 +61,29 @@ fn test_compute_address_deterministic_before_deploy() {
     let predicted_after = factory.compute_address(owner_pubkey, salt);
 
     assert(predicted_before == predicted_after, 'address not deterministic');
+}
+
+#[test]
+fn test_deploy_wallet_emits_wallet_deployed() {
+    let wallet_class = declare("MediaWallet").unwrap().contract_class();
+    let wallet_class_hash: felt252 = (*wallet_class.class_hash).into();
+    let factory = deploy_factory(wallet_class_hash);
+
+    let owner_pubkey: felt252 = 0xcafe;
+    let salt: felt252 = 0x7;
+
+    let mut spy = spy_events();
+    let address = factory.deploy_wallet(owner_pubkey, salt);
+
+    spy
+        .assert_emitted(
+            @array![
+                (
+                    factory.contract_address,
+                    MediaWalletFactory::Event::WalletDeployed(
+                        MediaWalletFactory::WalletDeployed { address, owner_pubkey, salt },
+                    ),
+                ),
+            ],
+        );
 }

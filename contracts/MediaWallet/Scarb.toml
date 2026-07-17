@@ -28,23 +28,7 @@ snforge_std = "0.38.3"
 
 [scripts]
 test = "snforge test"
-format = "scarb fmt && yarn prettier --write ."
-lint = "yarn eslint ."
-test-ts = "scarb --profile release build && yarn tsc && yarn mocha --recursive tests-integration/ --extension .test.ts"
-test-ts-sc = "yarn mocha --require ts-node/register/transpile-only --recursive tests-integration/**/*.test.ts"
-test-multisig = "scarb --profile release build && yarn tsc && yarn mocha tests-integration/multisig*.test.ts"
-test-session = "scarb --profile release build && yarn tsc && yarn mocha tests-integration/session/*.test.ts"
-test-multiowner = "scarb --profile release build && yarn tsc && yarn mocha tests-integration/multiowner/*.test.ts"
-test-list = "scarb --profile release build && yarn tsc && yarn mocha --dry-run tests-integration/*.test.ts"
-start-devnet = "docker build -t devnet . && docker run -d --rm --name devnet -p 127.0.0.1:5050:5050 devnet"
-kill-devnet = "docker stop devnet"
-profile = "scarb --profile release build && node --loader ts-node/esm scripts/profile-account.ts"
-deploy-account = "scarb --profile release build && node --loader ts-node/esm scripts/deploy-account.ts"
-deploy-multisig = "scarb --profile release build && node --loader ts-node/esm scripts/deploy-multisig.ts"
-generate-signature = "node --loader ts-node/esm ./scripts/generate-signature.ts"
-update-webauthn-dapp = "scarb --profile release build && cp target/release/*_ArgentAccount* examples/webauthn/src/lib && scarb run format"
-print-contract-size = "scarb --profile release build && node --loader ts-node/esm ./scripts/print-contract-size.ts"
-print-snip-12-encodedTypes = "node --loader ts-node/esm ./scripts/print-snip-12-encodeTypes.ts"
+format = "scarb fmt"
 
 # Allows to use the repository as dependency in other projects
 [lib]

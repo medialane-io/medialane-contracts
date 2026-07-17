@@ -42,17 +42,21 @@ Permissionless factory for deterministic `MediaWallet` deployment.
 - `compute_address(owner_pubkey: felt252, salt: felt252) → ContractAddress`
 - `wallet_class_hash() → ClassHash`
 
+**Events:**
+- `WalletDeployed { #[key] address: ContractAddress, #[key] owner_pubkey: felt252, salt: felt252 }` — emitted by `deploy_wallet` (both keys queryable via RPC `get_events` filtering)
+
 **Properties:**
 - `deploy_from_zero: true` — address is independent of factory address
 - Class hash fixed at construction; factory is immutable
 - No admin key, no upgrade, no fee
 - Address computation uses standard Starknet Pedersen hash (CONTRACT_ADDRESS_PREFIX)
 
-**Tests:** 4 tests in `tests/test_factory.cairo`
+**Tests:** 5 tests in `tests/test_factory.cairo`
 - `test_wallet_class_hash_is_fixed`
 - `test_compute_address_matches_deploy`
 - `test_deploy_wallet_different_salts_different_addresses`
 - `test_compute_address_deterministic_before_deploy`
+- `test_deploy_wallet_emits_wallet_deployed`
 
 ## Unchanged (covered by Argent audit)
 

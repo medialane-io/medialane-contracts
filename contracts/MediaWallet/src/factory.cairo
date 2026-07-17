@@ -42,6 +42,7 @@ pub mod MediaWalletFactory {
     pub struct WalletDeployed {
         #[key]
         pub address: ContractAddress,
+        #[key]
         pub owner_pubkey: felt252,
         pub salt: felt252,
     }

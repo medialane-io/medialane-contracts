@@ -43,7 +43,7 @@ Permissionless factory for deterministic `MediaWallet` deployment.
 - `wallet_class_hash() → ClassHash`
 
 **Events:**
-- `WalletDeployed { #[key] address: ContractAddress, owner_pubkey: felt252, salt: felt252 }` — emitted by `deploy_wallet`
+- `WalletDeployed { #[key] address: ContractAddress, #[key] owner_pubkey: felt252, salt: felt252 }` — emitted by `deploy_wallet` (both keys queryable via RPC `get_events` filtering)
 
 **Properties:**
 - `deploy_from_zero: true` — address is independent of factory address

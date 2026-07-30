@@ -308,7 +308,32 @@ of new code: `MediaWalletFactory` (`src/factory.cairo`, ~100 lines).
   wallet tracking).
 
 - **Status**: on `main` (added 2026-06-30; rename completed 2026-07-09), audited-fork
-  review passed 2026-07-09, **not yet declared/deployed**.
+  review passed 2026-07-09. **LIVE on Starknet mainnet (2026-07-30)** — also live on
+  Sepolia (media-wallet repo memory) with byte-identical class hashes (class hashes are
+  chain-independent; the same source declared on both networks hashes the same):
+
+  | Item | Address / hash |
+  |---|---|
+  | `MediaWallet` class hash | `0x014b210c7d47392691144bafecdca3c6c7791cc295ea305988da0a724c05ac31` |
+  | `MediaWalletFactory` class hash | `0x073c2b286c5d10ffcac14dead802e702b7290df78528d2f396dbf7e40fb7c852` |
+  | **`MediaWalletFactory` mainnet instance** | `0x01a0a9f796c8b93bb1043731e97bc12817cd77f7331d0776a51d2b9d9e199794` |
+
+  Deployed via `medialane-deployer` (`0x06acfcef048dcaac4a11fab313507d53145ed2a468f2a6188527918f1b12d935`).
+  Declare tx `0x0719344f9fa18f2388e68c1273f18dc6f3eed89e300483067981bce957997d27` (actual fee
+  ~121.77 STRK ≈ $3.11 at the time — sncast's auto-estimated resource bounds pad ~1.48x
+  over live mainnet gas prices; tuning `--l1-gas`/`--l2-gas`/`--l1-data-gas` + their
+  `-price` flags to ~1.15x over the current block's gas price, read via
+  `starknet_getBlockWithTxHashes`'s `l1_gas_price`/`l2_gas_price`/`l1_data_gas_price`,
+  keeps the max bound realistic without risking an undersized bound reverting for
+  out-of-resources — the ACTUAL charge only reflects real consumption regardless of the
+  bound). Factory deploy tx `0x047724073ebe13509e5a022f1c8457ce78bda1097ded3224a67cd2523ff64ae3`
+  (~0.06 STRK — deploying an already-declared class is cheap; declare is where the cost
+  is). Verified on-chain: `factory.wallet_class_hash()` returns the correct class hash.
+  Needs sncast **0.59.0** (`~/.asdf/installs/starknet-foundry/0.59.0/bin/sncast`), not the
+  repo-pinned 0.38.3 — the pinned version's RPC client only speaks spec 0.7, incompatible
+  with the Alchemy `v0_10` endpoint's 0.10.x responses. Profile: `[sncast.mediawallet-mainnet]`
+  in `contracts/MediaWallet/snfoundry.toml` (same machine-local accounts-file path pattern
+  every other package here already commits).
 
 > **Toolchain:** scarb 2.10.1 + starknet-foundry 0.38.3, pinned in the package
 > `.tool-versions` (both installed via asdf on this machine).

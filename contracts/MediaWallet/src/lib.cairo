@@ -36,7 +36,6 @@ pub mod linked_set {
 pub mod utils {
     pub mod array_ext;
     pub mod asserts;
-    pub mod bytes;
     pub mod calls;
     pub mod hashing;
     pub mod serialization;

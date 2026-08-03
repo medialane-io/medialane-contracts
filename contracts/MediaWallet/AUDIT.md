@@ -12,6 +12,8 @@ See `FORK.md` for the exact commit and audit reference.
 | `src/multisig_account/` | Separate contract if ever needed; not this account |
 | `src/mocks/` (partial) | Test utilities for removed modules only; `src5_mocks.cairo` retained |
 | `Webauthn`, `Eip191` variants | Removed from `SignerType`, `SignerSignature`, `Signer` enums |
+| `src/utils/bytes.cairo` | Dead sha256/byte helpers left over from the removed WebAuthn path (zero callers); deleted 2026-08-03. Account class hash unchanged — was already dead-code-eliminated from the Sierra. |
+| `IMediaWallet` trait (`src/account.cairo`) | Unused, multisig-shaped trait never embedded (the live interface is `IMediaWalletAccount`); deleted 2026-08-03 with its orphaned `Signer` import. |
 
 ## Renames (no logic change)
 

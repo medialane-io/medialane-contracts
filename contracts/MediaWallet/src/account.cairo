@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0
-use media_wallet::signer::signer_signature::Signer;
 use starknet::account::Call;
 
 pub const SRC5_ACCOUNT_INTERFACE_ID: felt252 = 0x2ceccef7f994940b3962a6c67e0ba4fcd37df7d131417c604f91e03caecc1cd;
@@ -27,20 +26,6 @@ pub trait IAccount<TContractState> {
     /// @return The shortstring 'VALID' when the signature is valid, 0 if the signature doesn't match the hash
     /// @dev it can also panic if the signature is not in a valid format
     fn is_valid_signature(self: @TContractState, hash: felt252, signature: Array<felt252>) -> felt252;
-}
-
-#[starknet::interface]
-pub trait IMediaWallet<TContractState> {
-    fn __validate_declare__(self: @TContractState, class_hash: felt252) -> felt252;
-    fn __validate_deploy__(
-        self: @TContractState,
-        class_hash: felt252,
-        contract_address_salt: felt252,
-        threshold: usize,
-        signers: Array<Signer>,
-    ) -> felt252;
-    fn get_name(self: @TContractState) -> felt252;
-    fn get_version(self: @TContractState) -> Version;
 }
 
 /// Deprecated methods for compatibility reasons

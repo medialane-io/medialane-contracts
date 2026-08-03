@@ -317,7 +317,7 @@ of new code: `MediaWalletFactory` (`src/factory.cairo`, ~100 lines).
 ```bash
 cd contracts/MediaWallet
 scarb build
-snforge test    # 120 tests, no RPC needed
+snforge test    # 121 tests, no RPC needed
 ```
 
 **Deploy:** declare `MediaWallet` → deploy `MediaWalletFactory(wallet_class_hash)` →

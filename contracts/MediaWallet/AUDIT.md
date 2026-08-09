@@ -35,30 +35,20 @@ GPL-3.0 SPDX headers added to all `src/` files.
 
 ## New code (full audit scope)
 
-### `src/factory.cairo` — `MediaWalletFactory`
+**None.** The delta from the audited baseline is renames and removals only — no logic was
+added to or modified in the account. A future audit engagement scoped to "the MediaWallet
+delta" therefore has an empty logic scope; what remains to review is that the removals are
+complete and that the renames are faithful, both of which a normalized diff against
+`6243bcf` demonstrates mechanically.
 
-Permissionless factory for deterministic `MediaWallet` deployment.
-
-**Interface:**
-- `deploy_wallet(owner_pubkey: felt252, salt: felt252) → ContractAddress`
-- `compute_address(owner_pubkey: felt252, salt: felt252) → ContractAddress`
-- `wallet_class_hash() → ClassHash`
-
-**Events:**
-- `WalletDeployed { #[key] address: ContractAddress, #[key] owner_pubkey: felt252, salt: felt252 }` — emitted by `deploy_wallet` (both keys queryable via RPC `get_events` filtering)
-
-**Properties:**
-- `deploy_from_zero: true` — address is independent of factory address
-- Class hash fixed at construction; factory is immutable
-- No admin key, no upgrade, no fee
-- Address computation uses standard Starknet Pedersen hash (CONTRACT_ADDRESS_PREFIX)
-
-**Tests:** 5 tests in `tests/test_factory.cairo`
-- `test_wallet_class_hash_is_fixed`
-- `test_compute_address_matches_deploy`
-- `test_deploy_wallet_different_salts_different_addresses`
-- `test_compute_address_deterministic_before_deploy`
-- `test_deploy_wallet_emits_wallet_deployed`
+`src/factory.cairo` (`MediaWalletFactory`) previously occupied this section. It was removed
+2026-08-09 as redundant: it derived addresses with `deploy_from_zero: true`, which is the
+same derivation a native `DEPLOY_ACCOUNT` transaction performs, and the account already
+validates its own deployment through `__validate_deploy__`. Wallets deploy themselves; see
+the README. Removing it left the `MediaWallet` class hash byte-identical
+(`0x14b210c7d47392691144bafecdca3c6c7791cc295ea305988da0a724c05ac31`), so no already-deployed
+wallet is affected. The factory instance previously declared on mainnet is abandoned, not
+migrated — it never deployed a wallet.
 
 ## Unchanged (covered by Argent audit)
 

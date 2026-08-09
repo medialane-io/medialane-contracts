@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
 pub mod account;
-pub mod factory;
 
 pub mod introspection;
 pub mod offchain_message;

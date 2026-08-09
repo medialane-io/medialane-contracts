@@ -5,3 +5,7 @@
 # Scarb / Cairo build output
 target/
 .snfoundry_cache/
+
+# sncast profiles — carry keyed RPC URLs and local account paths.
+# Copy the matching snfoundry.toml.example and fill in your own RPC URL.
+snfoundry.toml

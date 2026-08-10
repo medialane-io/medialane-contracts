@@ -1,0 +1,5 @@
+[sncast.mediawallet-mainnet]
+account = "medialane-deployer"
+accounts-file = "~/.starknet_accounts/starknet_open_zeppelin_accounts.json"
+url = "<STARKNET_MAINNET_RPC_URL>"
+wait-params = { timeout = 300, retry-interval = 10 }

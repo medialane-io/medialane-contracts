@@ -1,0 +1,13 @@
+[sncast.medialane1155-mainnet]
+account = "mediolanoprotocol"
+accounts-file = "~/.starknet_accounts/starknet_open_zeppelin_accounts.json"
+url = "<STARKNET_MAINNET_RPC_URL>"
+wait-params = { timeout = 300, retry-interval = 10 }
+
+[sncast.medialane-deployer]
+account = "medialane-deployer"
+accounts-file = "~/.starknet_accounts/starknet_open_zeppelin_accounts.json"
+url = "<STARKNET_MAINNET_RPC_URL>"
+wait-params = { timeout = 300, retry-interval = 10 }
+block-explorer = "Voyager"
+show-explorer-links = true

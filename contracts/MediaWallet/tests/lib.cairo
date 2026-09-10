@@ -10,6 +10,7 @@ mod test_version;
 mod wallet_account {
     mod test_change_owners_calldata;
     mod test_escape;
+    mod test_handoff_validation;
     mod test_signatures;
     mod test_wallet_account;
 }

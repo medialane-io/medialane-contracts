@@ -24,9 +24,9 @@ use snforge_std::{
 };
 use starknet::{ResourcesBounds, account::Call, contract_address_const};
 
-const VALID_UNTIL: u64 = 1100;
+pub const VALID_UNTIL: u64 = 1100;
 
-fn NEW_OWNER() -> (Signer, OwnerAliveSignature) {
+pub fn NEW_OWNER() -> (Signer, OwnerAliveSignature) {
     NEW_OWNER_FROM_KEY('NEW_OWNER')
 }
 

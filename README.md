@@ -131,7 +131,8 @@ npx hardhat test
 
 ## License
 
-Open source. See individual contract directories for details — most Cairo and
-EVM contracts are MIT or GPL-3.0 (`LICENSE` per directory); forked contracts
-additionally document their upstream license and audit provenance in that
-directory's `FORK.md`/`AUDIT.md`.
+MIT, see [LICENSE](LICENSE), except where a contract directory has its own
+`LICENSE`: `contracts/MediaWallet` is GPL-3.0 (forked from Argent's
+argent-contracts-starknet) and `contracts/Creator-Coin` keeps its upstream MIT
+notice. Forked contracts document their upstream provenance in that directory's
+`FORK.md`/`AUDIT.md`.

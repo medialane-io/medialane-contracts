@@ -32,6 +32,8 @@ pub trait IPOPCollection<TState> {
     fn claim(ref self: TState, proof: Span<felt252>);
     /// Organizer only. Mints to `recipient`; an empty `token_uri` uses the collection URI.
     fn issue(ref self: TState, recipient: ContractAddress, token_uri: ByteArray);
+    /// Holder only. Destroys the caller's credential; the address cannot receive another.
+    fn burn(ref self: TState, token_id: u256);
     fn organizer(self: @TState) -> ContractAddress;
     fn allowlist_root(self: @TState) -> felt252;
     fn claim_end_time(self: @TState) -> u64;

@@ -2,7 +2,8 @@
 ///
 /// The organizer (fixed at deployment) publishes an allowlist Merkle root and may
 /// issue tokens directly. Any listed address may claim one token with its proof.
-/// Tokens cannot be transferred, approved or burned. Metadata is fixed at deployment.
+/// Tokens cannot be transferred or approved; only their holder can burn them.
+/// Metadata is fixed at deployment.
 #[starknet::contract]
 pub mod POPCollection {
     use core::num::traits::Zero;
@@ -29,7 +30,7 @@ pub mod POPCollection {
     impl ERC721InternalImpl = ERC721Component::InternalImpl<ContractState>;
     impl SRC5InternalImpl = SRC5Component::InternalImpl<ContractState>;
 
-    /// Only mints pass: a token that already has an owner never moves.
+    /// Only mints and burns pass: a token never moves to another holder.
     impl SoulboundHooks of ERC721Component::ERC721HooksTrait<ContractState> {
         fn before_update(
             ref self: ERC721Component::ComponentState<ContractState>,
@@ -37,7 +38,7 @@ pub mod POPCollection {
             token_id: u256,
             auth: ContractAddress,
         ) {
-            assert(self.ERC721_owners.read(token_id).is_zero(), 'SOULBOUND');
+            assert(to.is_zero() || self.ERC721_owners.read(token_id).is_zero(), 'SOULBOUND');
         }
     }
 
@@ -187,6 +188,12 @@ pub mod POPCollection {
             self.assert_only_organizer();
             assert(!recipient.is_zero(), 'Invalid recipient');
             self.mint_to(recipient, token_uri);
+        }
+
+        fn burn(ref self: ContractState, token_id: u256) {
+            let holder = self.erc721._require_owned(token_id);
+            assert(get_caller_address() == holder, 'Caller is not the holder');
+            self.erc721.burn(token_id);
         }
 
         fn organizer(self: @ContractState) -> ContractAddress {

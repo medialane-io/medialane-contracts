@@ -1,16 +1,17 @@
 # Medialane Contracts
 
-Open-source smart contracts for [Medialane](https://medialane.io), a creator IP
-platform on Starknet. This repository holds the on-chain protocol — the source
-of truth for assets, marketplaces, wallets, and creator services. Each contract
-is self-contained with its own build, tests, and (where applicable) audit
-records — there is no shared root workspace or toolchain.
+The open onchain rails of [Medialane](https://medialane.io): marketplaces, launchpad services and the MediaWallet account, for creators, collectors, businesses and builders.
+
+The chain is the record. These contracts are where ownership, trades and provenance live, and they are written to be **permissionless** (anyone can create, list, buy or build without approval), **non-custodial** (assets and payments move directly between people) and **interoperable** (open token standards that work with wallets, explorers and marketplaces beyond Medialane). The marketplace contracts take no fee. Each contract is self-contained, with its own build, tests and, where applicable, audit records.
+
+Medialane also builds on the [Mediolano protocol](https://github.com/mediolano-os/mediolano-contracts), an independent public-goods protocol for programmable IP.
 
 **Current on-chain addresses and class hashes are read from
 [`@medialane/sdk`](https://www.npmjs.com/package/@medialane/sdk)'s chain
-registry (`chains.ts`)** — the single source of truth every app in the
-platform reads from. This README intentionally does not hardcode addresses,
-since a redeploy makes any hardcoded copy stale.
+registry (`chains.ts`)**, the single source of truth every app in the
+platform reads from, and are listed at
+[docs.medialane.io/dev/contracts](https://docs.medialane.io/dev/contracts).
+This README does not hardcode addresses, since a redeploy makes any copy stale.
 
 ## Contracts
 

@@ -1,71 +1,44 @@
-/// POPCollection — Soulbound ERC-721 collection for a single event / class / bootcamp.
+/// Soulbound ERC-721 credential collection for one event.
 ///
-/// Deployed by POPFactory. The organizer (ORGANIZER_ROLE) manages the allowlist.
-/// The platform admin (DEFAULT_ADMIN_ROLE) has override capability for emergencies.
-///
-/// Only whitelisted addresses can claim a token.
-/// Tokens are non-transferable (soulbound) — they function as on-chain credentials.
-///
-/// Per-token URI support: individual NFTs can have their own metadata URI,
-/// enabling achievement tiers (e.g. max score, distinction) within the same collection.
-
+/// The organizer (fixed at deployment) publishes an allowlist Merkle root and may
+/// issue tokens directly. Any listed address may claim one token with its proof.
+/// Tokens cannot be transferred, approved or burned. Metadata is fixed at deployment.
 #[starknet::contract]
 pub mod POPCollection {
     use core::num::traits::Zero;
-    use openzeppelin_access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
+    use core::poseidon::poseidon_hash_span;
+    use openzeppelin_interfaces::erc721::{IERC721, IERC721Metadata};
     use openzeppelin_introspection::src5::SRC5Component;
-    use openzeppelin_token::erc721::ERC721Component;
-    use openzeppelin_token::erc721::interface::IERC721Metadata;
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use openzeppelin_merkle_tree::merkle_proof::verify_poseidon;
+    use openzeppelin_token::erc721::{ERC721Component, ERC721OwnerOfDefaultImpl};
     use starknet::storage::{
-        StoragePointerReadAccess, StoragePointerWriteAccess, Map, StoragePathEntry,
+        Map, StorageMapReadAccess, StoragePathEntry, StoragePointerReadAccess,
+        StoragePointerWriteAccess,
     };
+    use starknet::{ContractAddress, get_block_timestamp, get_caller_address};
+    use crate::events::{AllowlistRootSet, Locked, TokenURISet};
+    use crate::interfaces::{IERC5192, IERC5192_ID, IPOPCollection};
 
-    use crate::interfaces::IPOPCollection::IPOPCollection;
-    use crate::events::{
-        POPMinted, AllowlistUpdated, BatchAllowlistUpdated, CollectionPauseChanged, TokenURIUpdated,
-    };
-
-    /// Organizers can manage allowlists, mint, and update metadata.
-    pub const ORGANIZER_ROLE: felt252 = selector!("ORGANIZER_ROLE");
-    /// On-chain release version of this immutable deployment.
-    pub const CONTRACT_VERSION: felt252 = '0.1.0';
-    /// Safety cap — 100 addresses per batch is well within Starknet tx limits.
-    pub const MAX_BATCH_SIZE: u32 = 100;
+    pub const VERSION: felt252 = '1.0.0';
 
     component!(path: ERC721Component, storage: erc721, event: ERC721Event);
-    component!(path: AccessControlComponent, storage: accesscontrol, event: AccessControlEvent);
     component!(path: SRC5Component, storage: src5, event: SRC5Event);
 
-    // Use ERC721Impl + ERC721CamelOnlyImpl individually instead of ERC721MixinImpl
-    // so we can provide our own IERC721Metadata with per-token URI override.
     #[abi(embed_v0)]
-    impl ERC721Impl = ERC721Component::ERC721Impl<ContractState>;
-    #[abi(embed_v0)]
-    impl ERC721CamelOnlyImpl = ERC721Component::ERC721CamelOnlyImpl<ContractState>;
-    #[abi(embed_v0)]
-    impl AccessControlMixinImpl =
-        AccessControlComponent::AccessControlMixinImpl<ContractState>;
-
+    impl SRC5Impl = SRC5Component::SRC5Impl<ContractState>;
     impl ERC721InternalImpl = ERC721Component::InternalImpl<ContractState>;
-    impl AccessControlInternalImpl = AccessControlComponent::InternalImpl<ContractState>;
+    impl SRC5InternalImpl = SRC5Component::InternalImpl<ContractState>;
 
-    /// Soulbound: auth is zero only for mints. Any other operation (transfer/burn) reverts.
-    impl ERC721SoulboundHooks of ERC721Component::ERC721HooksTrait<ContractState> {
+    /// Only mints pass: a token that already has an owner never moves.
+    impl SoulboundHooks of ERC721Component::ERC721HooksTrait<ContractState> {
         fn before_update(
             ref self: ERC721Component::ComponentState<ContractState>,
             to: ContractAddress,
             token_id: u256,
             auth: ContractAddress,
         ) {
-            assert(auth.is_zero(), 'SOULBOUND_TOKEN');
+            assert(self.ERC721_owners.read(token_id).is_zero(), 'SOULBOUND');
         }
-        fn after_update(
-            ref self: ERC721Component::ComponentState<ContractState>,
-            to: ContractAddress,
-            token_id: u256,
-            auth: ContractAddress,
-        ) {}
     }
 
     #[storage]
@@ -73,20 +46,13 @@ pub mod POPCollection {
         #[substorage(v0)]
         erc721: ERC721Component::Storage,
         #[substorage(v0)]
-        accesscontrol: AccessControlComponent::Storage,
-        #[substorage(v0)]
         src5: SRC5Component::Storage,
-        collection_id: u256,
+        organizer: ContractAddress,
         claim_end_time: u64,
-        paused: bool,
+        allowlist_root: felt252,
         last_token_id: u256,
-        // Per-token URI overrides: set a custom URI per token for achievement tiers.
-        // Falls back to {base_uri}{token_id} when empty.
-        token_uris: Map<u256, ByteArray>,
-        // allowlist[address] = true → address may call claim()
-        allowlist: Map<ContractAddress, bool>,
-        // claimed[address]   = true → address has already minted
         claimed: Map<ContractAddress, bool>,
+        token_uris: Map<u256, ByteArray>,
     }
 
     #[event]
@@ -95,233 +61,176 @@ pub mod POPCollection {
         #[flat]
         ERC721Event: ERC721Component::Event,
         #[flat]
-        AccessControlEvent: AccessControlComponent::Event,
-        #[flat]
         SRC5Event: SRC5Component::Event,
-        POPMinted: POPMinted,
-        AllowlistUpdated: AllowlistUpdated,
-        BatchAllowlistUpdated: BatchAllowlistUpdated,
-        CollectionPauseChanged: CollectionPauseChanged,
-        TokenURIUpdated: TokenURIUpdated,
+        AllowlistRootSet: AllowlistRootSet,
+        TokenURISet: TokenURISet,
+        Locked: Locked,
     }
 
-    /// Called by POPFactory via deploy_syscall.
-    ///
-    /// `platform_admin`  — Mediolano's admin address; gets DEFAULT_ADMIN_ROLE + ORGANIZER_ROLE.
-    /// `organizer`       — The provider's address; gets ORGANIZER_ROLE.
-    /// `base_uri`        — IPFS/Arweave URI for the collection (e.g. "ipfs://QmXXX/").
-    ///                     Standard tokenURI = base_uri + token_id unless overridden per-token.
-    /// `claim_end_time`  — Unix timestamp deadline. 0 = no deadline.
     #[constructor]
     fn constructor(
         ref self: ContractState,
         name: ByteArray,
         symbol: ByteArray,
         base_uri: ByteArray,
-        collection_id: u256,
-        platform_admin: ContractAddress,
         organizer: ContractAddress,
         claim_end_time: u64,
     ) {
+        assert(!organizer.is_zero(), 'Invalid organizer');
         self.erc721.initializer(name, symbol, base_uri);
-        self.accesscontrol.initializer();
-        // Platform admin: emergency override + day-to-day organizer capabilities
-        self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, platform_admin);
-        self.accesscontrol._grant_role(ORGANIZER_ROLE, platform_admin);
-        // Provider organizer: day-to-day management of this collection
-        self.accesscontrol._grant_role(ORGANIZER_ROLE, organizer);
-        self.collection_id.write(collection_id);
+        self.src5.register_interface(IERC5192_ID);
+        self.organizer.write(organizer);
         self.claim_end_time.write(claim_end_time);
     }
 
-    // ── ERC-721 Metadata with per-token URI override ──────────────────────────
-
-    /// Implements IERC721Metadata with a custom token_uri that checks the per-token
-    /// override map before falling back to the collection base URI.
     #[abi(embed_v0)]
-    impl POPMetadataImpl of IERC721Metadata<ContractState> {
+    impl ERC721Impl of IERC721<ContractState> {
+        fn balance_of(self: @ContractState, account: ContractAddress) -> u256 {
+            assert(!account.is_zero(), 'ERC721: invalid account');
+            self.erc721.ERC721_balances.read(account)
+        }
+
+        fn owner_of(self: @ContractState, token_id: u256) -> ContractAddress {
+            self.erc721._require_owned(token_id)
+        }
+
+        fn safe_transfer_from(
+            ref self: ContractState,
+            from: ContractAddress,
+            to: ContractAddress,
+            token_id: u256,
+            data: Span<felt252>,
+        ) {
+            core::panic_with_felt252('SOULBOUND')
+        }
+
+        fn transfer_from(
+            ref self: ContractState, from: ContractAddress, to: ContractAddress, token_id: u256,
+        ) {
+            core::panic_with_felt252('SOULBOUND')
+        }
+
+        fn approve(ref self: ContractState, to: ContractAddress, token_id: u256) {
+            core::panic_with_felt252('SOULBOUND')
+        }
+
+        fn set_approval_for_all(ref self: ContractState, operator: ContractAddress, approved: bool) {
+            core::panic_with_felt252('SOULBOUND')
+        }
+
+        fn get_approved(self: @ContractState, token_id: u256) -> ContractAddress {
+            self.erc721._require_owned(token_id);
+            Zero::zero()
+        }
+
+        fn is_approved_for_all(
+            self: @ContractState, owner: ContractAddress, operator: ContractAddress,
+        ) -> bool {
+            false
+        }
+    }
+
+    #[abi(embed_v0)]
+    impl ERC721MetadataImpl of IERC721Metadata<ContractState> {
         fn name(self: @ContractState) -> ByteArray {
             self.erc721.ERC721_name.read()
         }
+
         fn symbol(self: @ContractState) -> ByteArray {
             self.erc721.ERC721_symbol.read()
         }
-        /// Resolution order:
-        ///   1. Per-token URI (set via set_token_uri or admin_mint with custom_uri)
-        ///   2. {base_uri}{token_id}  (standard ERC-721 behaviour)
-        ///   3. Empty string          (if base_uri is also unset)
+
+        /// The token's own URI if it was issued with one, else the collection URI.
         fn token_uri(self: @ContractState, token_id: u256) -> ByteArray {
+            self.erc721._require_owned(token_id);
             let custom = self.token_uris.entry(token_id).read();
             if custom.len() > 0 {
-                return custom;
-            }
-            let base = self.erc721._base_uri();
-            if base.len() > 0 {
-                format!("{}{}", base, token_id)
+                custom
             } else {
-                ""
+                self.erc721._base_uri()
             }
         }
     }
 
-    // ── Main interface ────────────────────────────────────────────────────────
+    #[abi(embed_v0)]
+    impl ERC5192Impl of IERC5192<ContractState> {
+        fn locked(self: @ContractState, token_id: u256) -> bool {
+            self.erc721._require_owned(token_id);
+            true
+        }
+    }
 
     #[abi(embed_v0)]
     impl POPCollectionImpl of IPOPCollection<ContractState> {
-        // ── Allowlist management ──────────────────────────────────────────────
-
-        fn add_to_allowlist(ref self: ContractState, address: ContractAddress) {
-            self.accesscontrol.assert_only_role(ORGANIZER_ROLE);
-            assert(!address.is_zero(), 'Invalid address');
-            self.allowlist.entry(address).write(true);
-            self
-                .emit(
-                    AllowlistUpdated {
-                        user: address, allowed: true, timestamp: get_block_timestamp(),
-                    },
-                );
+        fn set_allowlist_root(ref self: ContractState, root: felt252) {
+            self.assert_only_organizer();
+            self.allowlist_root.write(root);
+            self.emit(AllowlistRootSet { root });
         }
 
-        fn batch_add_to_allowlist(ref self: ContractState, addresses: Span<ContractAddress>) {
-            self.accesscontrol.assert_only_role(ORGANIZER_ROLE);
-            let count = addresses.len();
-            assert(count <= MAX_BATCH_SIZE, 'Batch too large');
-            let mut i = 0;
-            loop {
-                if i >= count {
-                    break;
-                }
-                let addr = *addresses.at(i);
-                assert(!addr.is_zero(), 'Invalid address in batch');
-                self.allowlist.entry(addr).write(true);
-                i += 1;
-            };
-            self.emit(BatchAllowlistUpdated { count, timestamp: get_block_timestamp() });
-        }
-
-        fn remove_from_allowlist(ref self: ContractState, address: ContractAddress) {
-            self.accesscontrol.assert_only_role(ORGANIZER_ROLE);
-            self.allowlist.entry(address).write(false);
-            self
-                .emit(
-                    AllowlistUpdated {
-                        user: address, allowed: false, timestamp: get_block_timestamp(),
-                    },
-                );
-        }
-
-        // ── Collection management ─────────────────────────────────────────────
-
-        fn set_base_uri(ref self: ContractState, new_uri: ByteArray) {
-            self.accesscontrol.assert_only_role(ORGANIZER_ROLE);
-            self.erc721._set_base_uri(new_uri);
-        }
-
-        fn set_token_uri(ref self: ContractState, token_id: u256, uri: ByteArray) {
-            self.accesscontrol.assert_only_role(ORGANIZER_ROLE);
-            self.token_uris.entry(token_id).write(uri.clone());
-            self.emit(TokenURIUpdated { token_id, uri, timestamp: get_block_timestamp() });
-        }
-
-        /// Emergency pause/unpause — platform admin only, not organizer.
-        fn set_paused(ref self: ContractState, paused: bool) {
-            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
-            self.paused.write(paused);
-            self
-                .emit(
-                    CollectionPauseChanged {
-                        collection_id: self.collection_id.read(),
-                        paused,
-                        timestamp: get_block_timestamp(),
-                    },
-                );
-        }
-
-        /// Mints directly to a recipient, bypassing the allowlist.
-        /// Pass a non-empty `custom_uri` to assign an achievement-tier URI at mint time.
-        /// Pass an empty ByteArray to use the standard collection base URI.
-        fn admin_mint(ref self: ContractState, recipient: ContractAddress, custom_uri: ByteArray) {
-            self.accesscontrol.assert_only_role(ORGANIZER_ROLE);
-            assert(!recipient.is_zero(), 'Invalid recipient');
-            assert(!self.claimed.entry(recipient).read(), 'Already claimed');
-            let token_id = self._mint_pop(recipient);
-            if custom_uri.len() > 0 {
-                self.token_uris.entry(token_id).write(custom_uri.clone());
-                self
-                    .emit(
-                        TokenURIUpdated {
-                            token_id, uri: custom_uri, timestamp: get_block_timestamp(),
-                        },
-                    );
-            }
-        }
-
-        // ── Student claim ─────────────────────────────────────────────────────
-
-        fn claim(ref self: ContractState) {
+        fn claim(ref self: ContractState, proof: Span<felt252>) {
             let caller = get_caller_address();
-            assert(!self.paused.read(), 'Collection is paused');
-            let end_time = self.claim_end_time.read();
-            if end_time > 0 {
-                assert(get_block_timestamp() <= end_time, 'Claim window closed');
+            let root = self.allowlist_root.read();
+            assert(root != 0, 'Claims are closed');
+            let end = self.claim_end_time.read();
+            if end != 0 {
+                assert(get_block_timestamp() <= end, 'Claim window closed');
             }
-            assert(self.allowlist.entry(caller).read(), 'Not on allowlist');
-            assert(!self.claimed.entry(caller).read(), 'Already claimed');
-            self._mint_pop(caller);
+            let leaf = poseidon_hash_span(
+                array![poseidon_hash_span(array![caller.into()].span())].span(),
+            );
+            assert(verify_poseidon(proof, root, leaf), 'Not on allowlist');
+            self.mint_to(caller, "");
         }
 
-        // ── View functions ────────────────────────────────────────────────────
+        fn issue(ref self: ContractState, recipient: ContractAddress, token_uri: ByteArray) {
+            self.assert_only_organizer();
+            assert(!recipient.is_zero(), 'Invalid recipient');
+            self.mint_to(recipient, token_uri);
+        }
 
-        fn is_eligible(self: @ContractState, address: ContractAddress) -> bool {
-            self.allowlist.entry(address).read()
+        fn organizer(self: @ContractState) -> ContractAddress {
+            self.organizer.read()
+        }
+
+        fn allowlist_root(self: @ContractState) -> felt252 {
+            self.allowlist_root.read()
+        }
+
+        fn claim_end_time(self: @ContractState) -> u64 {
+            self.claim_end_time.read()
         }
 
         fn has_claimed(self: @ContractState, address: ContractAddress) -> bool {
             self.claimed.entry(address).read()
         }
 
-        fn get_collection_id(self: @ContractState) -> u256 {
-            self.collection_id.read()
-        }
-
-        fn get_claim_end_time(self: @ContractState) -> u64 {
-            self.claim_end_time.read()
-        }
-
-        fn is_paused(self: @ContractState) -> bool {
-            self.paused.read()
-        }
-
-        fn total_minted(self: @ContractState) -> u256 {
+        fn total_issued(self: @ContractState) -> u256 {
             self.last_token_id.read()
         }
 
-        fn contract_version(self: @ContractState) -> felt252 {
-            CONTRACT_VERSION
+        fn version(self: @ContractState) -> felt252 {
+            VERSION
         }
     }
 
-    // ── Internal ──────────────────────────────────────────────────────────────
-
     #[generate_trait]
     impl InternalImpl of InternalTrait {
-        /// Mints one token to `recipient`, marks them as claimed, emits POPMinted.
-        /// Returns the new token ID so callers can optionally set a per-token URI.
-        fn _mint_pop(ref self: ContractState, recipient: ContractAddress) -> u256 {
-            let next_token_id = self.last_token_id.read() + 1;
-            self.erc721.mint(recipient, next_token_id);
-            self.last_token_id.write(next_token_id);
+        fn assert_only_organizer(self: @ContractState) {
+            assert(get_caller_address() == self.organizer.read(), 'Caller is not the organizer');
+        }
+
+        fn mint_to(ref self: ContractState, recipient: ContractAddress, token_uri: ByteArray) {
+            assert(!self.claimed.entry(recipient).read(), 'Already issued');
+            let token_id = self.last_token_id.read() + 1;
+            self.last_token_id.write(token_id);
             self.claimed.entry(recipient).write(true);
-            self
-                .emit(
-                    POPMinted {
-                        collection_id: self.collection_id.read(),
-                        recipient,
-                        token_id: next_token_id,
-                        timestamp: get_block_timestamp(),
-                    },
-                );
-            next_token_id
+            self.erc721.mint(recipient, token_id);
+            if token_uri.len() > 0 {
+                self.token_uris.entry(token_id).write(token_uri.clone());
+                self.emit(TokenURISet { token_id, uri: token_uri });
+            }
+            self.emit(Locked { token_id });
         }
     }
 }

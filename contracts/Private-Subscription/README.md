@@ -55,9 +55,3 @@ Views: `verify_tier`, `get_plan`, `get_last_plan_id`, `current_root`,
 scarb build
 snforge test
 ```
-
-## Design
-
-Full architecture and contract spec live in `medialane-core`:
-`docs/specs/2026-07-04-private-subscriptions-system-architecture.md` and
-`docs/specs/2026-07-04-private-subscription-contract-design.md`.

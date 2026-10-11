@@ -1,94 +1,97 @@
-use snforge_std_deprecated::{declare, ContractClassTrait, DeclareResultTrait};
-use snforge_std_deprecated::{start_cheat_caller_address, stop_cheat_caller_address};
-use starknet::ContractAddress;
-use starknet::contract_address_const;
-
-use collection_drop::interfaces::IDropFactory::{IDropFactoryDispatcher, IDropFactoryDispatcherTrait};
-use collection_drop::interfaces::IDropCollection::{
-    IDropCollectionDispatcher, IDropCollectionDispatcherTrait,
+use collection_drop::interfaces::{
+    IDropCollectionDispatcher, IDropFactoryDispatcher, IDropFactoryDispatcherTrait,
 };
-use collection_drop::types::ClaimConditions;
-use openzeppelin_token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
+use collection_drop::types::SaleTerms;
+use core::num::traits::Zero;
+use openzeppelin_interfaces::erc20::{IERC20Dispatcher, IERC20DispatcherTrait};
+use snforge_std::{
+    ContractClassTrait, DeclareResultTrait, declare, start_cheat_caller_address,
+    stop_cheat_caller_address,
+};
+use starknet::ContractAddress;
 
-// ── Test addresses ────────────────────────────────────────────────────────────
-
-pub fn ADMIN() -> ContractAddress {
-    contract_address_const::<'ADMIN'>()
-}
 pub fn ORGANIZER() -> ContractAddress {
-    contract_address_const::<'ORGANIZER'>()
+    'ORGANIZER'.try_into().unwrap()
 }
-pub fn MINTER1() -> ContractAddress {
-    contract_address_const::<'MINTER1'>()
+pub fn STRANGER() -> ContractAddress {
+    'STRANGER'.try_into().unwrap()
 }
-pub fn MINTER2() -> ContractAddress {
-    contract_address_const::<'MINTER2'>()
+pub fn ALICE() -> ContractAddress {
+    0x111.try_into().unwrap()
 }
-pub fn MINTER3() -> ContractAddress {
-    contract_address_const::<'MINTER3'>()
+pub fn BOB() -> ContractAddress {
+    0x222.try_into().unwrap()
 }
-
-// ── Default helpers ───────────────────────────────────────────────────────────
-
-pub fn free_conditions() -> ClaimConditions {
-    ClaimConditions {
-        start_time: 0,
-        end_time: 0,
-        price: 0,
-        payment_token: contract_address_const::<0>(),
-        max_quantity_per_wallet: 5,
-    }
+pub fn CAROL() -> ContractAddress {
+    0x333.try_into().unwrap()
 }
 
-pub fn paid_conditions(payment_token: ContractAddress) -> ClaimConditions {
-    ClaimConditions {
-        start_time: 0,
-        end_time: 0,
-        price: 1000_u256,
-        payment_token,
-        max_quantity_per_wallet: 3,
-    }
+/// Root of the tree over [0x111, 0x222, 0x333] (same vector as Pop-Protocol).
+pub const ROOT: felt252 = 0x055671b388a2640bb77a4a14b1650b4e2b08731a6e1bd966a642ddbaf2f150cb;
+pub fn ALICE_PROOF() -> Span<felt252> {
+    array![
+        0x03b85dadc24bd0f247859d1bdbefd71e59ec8c554f586cb92aa90a1070d08abe,
+        0x03f24a6254d5b5f354998d1ad80fc04404b404232d43c44f2b25420044a96366,
+    ]
+        .span()
+}
+pub fn BOB_PROOF() -> Span<felt252> {
+    array![
+        0x03387b5ce16ea370105dca95f7939d6a98cebad5a91577c6ff57e4c864563d0a,
+        0x03f24a6254d5b5f354998d1ad80fc04404b404232d43c44f2b25420044a96366,
+    ]
+        .span()
+}
+pub fn NO_PROOF() -> Span<felt252> {
+    array![].span()
 }
 
-// ── Deployment helpers ────────────────────────────────────────────────────────
+pub const PRICE: u256 = 100;
+
+pub fn base_uri() -> ByteArray {
+    "ipfs://drop/"
+}
+
+pub fn free_terms() -> SaleTerms {
+    SaleTerms { start_time: 0, end_time: 0, price: 0, payment_token: Zero::zero(), max_per_wallet: 0 }
+}
+
+pub fn paid_terms(token: ContractAddress) -> SaleTerms {
+    SaleTerms { start_time: 0, end_time: 0, price: PRICE, payment_token: token, max_per_wallet: 0 }
+}
 
 pub fn deploy_factory() -> IDropFactoryDispatcher {
-    let collection_class = declare("DropCollection").unwrap().contract_class();
-    let factory_class = declare("DropFactory").unwrap().contract_class();
-
-    let mut calldata: Array<felt252> = array![];
-    (ADMIN(), *collection_class.class_hash).serialize(ref calldata);
-
-    let (factory_address, _) = factory_class.deploy(@calldata).unwrap();
-    IDropFactoryDispatcher { contract_address: factory_address }
+    let collection = declare("DropCollection").unwrap().contract_class();
+    let factory = declare("DropFactory").unwrap().contract_class();
+    let (address, _) = factory.deploy(@array![(*collection.class_hash).into()]).unwrap();
+    IDropFactoryDispatcher { contract_address: address }
 }
 
-pub fn deploy_mock_erc20(recipient: ContractAddress, supply: u256) -> IERC20Dispatcher {
-    let erc20_class = declare("MockERC20").unwrap().contract_class();
-    let mut calldata: Array<felt252> = array![];
-    (recipient, supply).serialize(ref calldata);
-    let (addr, _) = erc20_class.deploy(@calldata).unwrap();
-    IERC20Dispatcher { contract_address: addr }
-}
-
-/// Deploys a free drop via the factory as the given caller.
-pub fn create_free_drop(
-    factory: IDropFactoryDispatcher, caller: ContractAddress,
+/// Creates a drop as ORGANIZER.
+pub fn create_drop(
+    factory: IDropFactoryDispatcher, max_supply: u256, terms: SaleTerms, root: felt252,
 ) -> IDropCollectionDispatcher {
-    start_cheat_caller_address(factory.contract_address, caller);
-    let addr = factory
-        .create_drop("Limited Edition #1", "DROP1", "ipfs://QmDrop/", 100_u256, free_conditions());
+    start_cheat_caller_address(factory.contract_address, ORGANIZER());
+    let address = factory.create_drop("Drop", "DRP", base_uri(), max_supply, terms, root);
     stop_cheat_caller_address(factory.contract_address);
-    IDropCollectionDispatcher { contract_address: addr }
+    IDropCollectionDispatcher { contract_address: address }
 }
 
-/// Deploys an open-edition (unlimited supply) free drop.
-pub fn create_open_drop(
-    factory: IDropFactoryDispatcher, caller: ContractAddress,
-) -> IDropCollectionDispatcher {
-    start_cheat_caller_address(factory.contract_address, caller);
-    let addr = factory
-        .create_drop("Open Edition", "OPEN", "ipfs://QmOpen/", 0_u256, free_conditions());
-    stop_cheat_caller_address(factory.contract_address);
-    IDropCollectionDispatcher { contract_address: addr }
+pub fn free_drop(max_supply: u256) -> IDropCollectionDispatcher {
+    create_drop(deploy_factory(), max_supply, free_terms(), 0)
+}
+
+/// A token holding `amount` for `holder`.
+pub fn deploy_token(holder: ContractAddress, amount: u256) -> IERC20Dispatcher {
+    let token = declare("MockERC20").unwrap().contract_class();
+    let mut calldata = array![holder.into()];
+    amount.serialize(ref calldata);
+    let (address, _) = token.deploy(@calldata).unwrap();
+    IERC20Dispatcher { contract_address: address }
+}
+
+pub fn approve(token: IERC20Dispatcher, owner: ContractAddress, spender: ContractAddress, amount: u256) {
+    start_cheat_caller_address(token.contract_address, owner);
+    token.approve(spender, amount);
+    stop_cheat_caller_address(token.contract_address);
 }

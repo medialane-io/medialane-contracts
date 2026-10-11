@@ -16,8 +16,9 @@ Merkle leaves are `poseidon([poseidon([address])])`, nodes are the Poseidon hash
 
 | Network | Item | Address / class hash |
 |---|---|---|
-| Mainnet | `DropFactory` | _pending_ |
-| Mainnet | `DropCollection` class | _pending_ |
+| Mainnet | `DropFactory` | `0x049cae891b9195277e018ae99765a3b0e5f6b0f6a1807c5db789342bccc0e130` (block 16240820) |
+| Mainnet | `DropCollection` class | `0x0641d0255db1d218e08b367f40559d5ccdc22d34fee8ef0500b4247092a60132` |
+| Mainnet | `DropFactory` class | `0x010d574313e445d3eca234a941d25f60a57b7ad7ea9d7e8cd079e3e06899849a` |
 
 ## Build & Test
 
